@@ -3,7 +3,6 @@ import { Header } from './components/Header';
 import { Sidebar, resolveUserDisplayName } from './components/Sidebar';
 import { StudentAssistantChat } from './components/StudentAssistantChat';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { PortalView } from './components/PortalView';
 
 import { Lesson5EModule } from './components/modules/Lesson5EModule';
 import { AssignmentModule } from './components/modules/AssignmentModule';
@@ -20,8 +19,9 @@ import { ModuleType, UserRole, Lesson5EPlan, HomeworkAssignment, QuestionItem, G
 import { INITIAL_USERS } from './services/mockData';
 import { db, auth } from './services/firebase';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged } from 'firebase/auth';
 import { resolveTeacherNameByEmail } from './services/teacherStorageService';
+import { getStudentsFromLocalStorage } from './services/studentStorageService';
 import {
   saveQuestionToFirestore,
   saveQuestionsBatchToFirestore,
@@ -52,36 +52,62 @@ import {
 import { CheckCircle2, AlertCircle, Info, Sparkles, X } from 'lucide-react';
 import { RewardToastNotification } from './components/common/RewardToastNotification';
 
+const DEFAULT_TEACHER_EMAIL = 'thuthuthtk@gmail.com';
+
 export function App() {
-  const [showPortal, setShowPortal] = useState<boolean>(true);
   const [activeModule, setActiveModule] = useState<ModuleType>('lesson_5e');
-  const [userRole, setUserRole] = useState<UserRole>('teacher');
+  const [userRole, setUserRole] = useState<UserRole>(() => {
+    if (typeof window === 'undefined') return 'admin';
+    const savedRole = localStorage.getItem('eduplay_active_role');
+    if (savedRole === 'student' || savedRole === 'teacher' || savedRole === 'admin') {
+      return savedRole;
+    }
+    return 'admin';
+  });
   const [gameInitialTab, setGameInitialTab] = useState<'games' | 'store'>('games');
-  
-  // Isolated Teacher Session State
-  const [teacherEmail, setTeacherEmail] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('eduplay_teacher_email') : null) || 'vanquan18189@gmail.com');
+
+  // Silent Auto-Login Teacher Session State
+  const [teacherEmail, setTeacherEmail] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const savedEmail = localStorage.getItem('eduplay_teacher_email');
+      if (savedEmail && savedEmail.trim()) return savedEmail;
+      localStorage.setItem('eduplay_teacher_email', DEFAULT_TEACHER_EMAIL);
+    }
+    return DEFAULT_TEACHER_EMAIL;
+  });
   const [teacherName, setTeacherName] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      const email = localStorage.getItem('eduplay_teacher_email') || 'vanquan18189@gmail.com';
+      const email = localStorage.getItem('eduplay_teacher_email') || DEFAULT_TEACHER_EMAIL;
       const saved = localStorage.getItem('eduplay_teacher_name');
-      return resolveTeacherNameByEmail(email, saved);
+      const resolved = resolveTeacherNameByEmail(email, saved, undefined, 'admin');
+      localStorage.setItem('eduplay_teacher_name', resolved);
+      return resolved;
     }
-    return 'Thầy Văn Quân';
+    return 'Nguyễn Thị Thu';
   });
 
-  // Isolated Student Session State
+  // Silent Grade 3 Class & Student Session State
+  const [currentGrade, setCurrentGrade] = useState<string>('Khối 3');
+  const [currentClass, setCurrentClass] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'Lớp 3C';
+    return localStorage.getItem('eduplay_current_class') || 'Lớp 3C';
+  });
   const [currentStudent, setCurrentStudent] = useState<StudentRecord | null>(() => {
     if (typeof window === 'undefined') return null;
     try {
       const saved = localStorage.getItem('eduplay_student_session');
-      return saved ? JSON.parse(saved) : null;
+      if (saved) return JSON.parse(saved);
+      const cls = localStorage.getItem('eduplay_current_class') || 'Lớp 3C';
+      const roster = getStudentsFromLocalStorage(cls);
+      if (roster && roster.length > 0) {
+        return roster[0];
+      }
     } catch {
       return null;
     }
+    return null;
   });
 
-  const [currentGrade, setCurrentGrade] = useState<string>('Khối 3');
-  const [currentClass, setCurrentClass] = useState<string>('Lớp 3A');
   const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('eduplay_gemini_api_key') || '');
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
 
@@ -219,25 +245,23 @@ export function App() {
     }
   }, [userRole, activeModule]);
 
-  // Sync Firebase Auth state with Teacher session only (never override student session)
+  // Sync Firebase Auth state with Teacher session if signed in, while keeping silent default session active
   useEffect(() => {
     if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user && user.email) {
         setTeacherEmail(user.email);
         localStorage.setItem('eduplay_teacher_email', user.email);
-        const resolvedName = resolveTeacherNameByEmail(user.email, user.displayName);
+        const resolvedName = resolveTeacherNameByEmail(user.email, user.displayName, undefined, 'admin');
         setTeacherName(resolvedName);
         localStorage.setItem('eduplay_teacher_name', resolvedName);
       } else {
-        // Clear cached stale user profile on logout
-        const defaultEmail = 'vanquan18189@gmail.com';
-        const defaultName = resolveTeacherNameByEmail(defaultEmail);
-        setTeacherEmail(defaultEmail);
-        setTeacherName(defaultName);
-        localStorage.removeItem('eduplay_teacher_email');
-        localStorage.removeItem('eduplay_teacher_name');
-        localStorage.removeItem('eduplay_teacher_profile');
+        const storedEmail = localStorage.getItem('eduplay_teacher_email') || DEFAULT_TEACHER_EMAIL;
+        const resolvedName = resolveTeacherNameByEmail(storedEmail, null, undefined, 'admin');
+        setTeacherEmail(storedEmail);
+        setTeacherName(resolvedName);
+        localStorage.setItem('eduplay_teacher_email', storedEmail);
+        localStorage.setItem('eduplay_teacher_name', resolvedName);
       }
     });
     return () => unsubscribe();
@@ -380,82 +404,56 @@ export function App() {
     setUserAccounts((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const handleSelectPortal = (
-    role: UserRole,
-    grade?: string,
-    selectedClass?: string,
-    userDetails?: { email?: string; name?: string; student?: StudentRecord }
-  ) => {
-    setUserRole(role);
-    if (grade) setCurrentGrade(grade);
-    if (selectedClass) setCurrentClass(selectedClass);
+  const handleSwitchPortalMode = (targetRole: UserRole, targetClass?: string) => {
+    const effectiveClass = targetClass || currentClass || 'Lớp 3C';
+    setUserRole(targetRole);
+    setCurrentGrade('Khối 3');
+    setCurrentClass(effectiveClass);
+    localStorage.setItem('eduplay_active_role', targetRole);
 
-    if (role === 'student') {
-      const stObj: StudentRecord = userDetails?.student || {
-        id: 'st-temp-1',
-        stt: 1,
-        code: '3a1',
-        sddcn: '038316001001',
-        name: userDetails?.name || 'Hoàng Bảo An',
-        fullName: userDetails?.name || 'Hoàng Bảo An',
-        gender: 'Nam',
-        dob: '15/05/2016',
-        className: selectedClass || 'Lớp 3A',
-        parentName: 'Phụ huynh',
-        phone: '0985608063',
-        email: userDetails?.email || 'hs.3a1@quanghungpk1.edu.vn',
-        status: 'active',
-        conduct: 'Tốt',
-        avgScore: 9.0,
-        avatar: '🐰',
-        coins: 1000
-      };
+    if (targetRole === 'student') {
+      const roster = getStudentsFromLocalStorage(effectiveClass);
+      const existingMatchesClass =
+        currentStudent &&
+        (currentStudent.className || '').replace(/^Lớp\s*/i, '').trim().toUpperCase() ===
+          effectiveClass.replace(/^Lớp\s*/i, '').trim().toUpperCase();
+
+      const stObj: StudentRecord =
+        (existingMatchesClass && !targetClass ? currentStudent : roster?.[0]) || {
+          id: `st-${effectiveClass.replace(/^Lớp\s*/i, '').toLowerCase()}-1`,
+          stt: 1,
+          code: `${effectiveClass.replace(/^Lớp\s*/i, '').toUpperCase()}26-27-1`,
+          sddcn: '038316001001',
+          name: `Học sinh ${effectiveClass}`,
+          fullName: `Học sinh ${effectiveClass}`,
+          gender: 'Nam',
+          dob: '15/05/2017',
+          className: effectiveClass,
+          parentName: 'Phụ huynh',
+          phone: '0985608063',
+          email: `hs.${effectiveClass.replace(/^Lớp\s*/i, '').toLowerCase()}1@quanghungpk1.edu.vn`,
+          status: 'active',
+          conduct: 'Tốt',
+          avgScore: 9.0,
+          avatar: '🐰',
+          coins: 1000
+        };
       setCurrentStudent(stObj);
       localStorage.setItem('eduplay_student_session', JSON.stringify(stObj));
+      localStorage.setItem('eduplay_current_class', effectiveClass);
+      localStorage.setItem('eduplay_active_class', effectiveClass);
+      window.dispatchEvent(new CustomEvent('eduplay_student_session_updated', { detail: { student: stObj } }));
     } else {
-      if (userDetails?.email) {
-        setTeacherEmail(userDetails.email);
-        localStorage.setItem('eduplay_teacher_email', userDetails.email);
-      }
-      if (userDetails?.name) {
-        setTeacherName(userDetails.name);
-        localStorage.setItem('eduplay_teacher_name', userDetails.name);
-      }
+      const email = localStorage.getItem('eduplay_teacher_email') || DEFAULT_TEACHER_EMAIL;
+      const name = resolveTeacherNameByEmail(email, null, undefined, 'admin');
+      setTeacherEmail(email);
+      setTeacherName(name);
+      localStorage.setItem('eduplay_teacher_email', email);
+      localStorage.setItem('eduplay_teacher_name', name);
     }
-    setShowPortal(false);
-  };
 
-  const handleLogout = async () => {
-    try {
-      if (auth) {
-        await signOut(auth);
-      }
-    } catch (err) {
-      console.warn('Logout error:', err);
-    }
-    localStorage.removeItem('eduplay_teacher_email');
-    localStorage.removeItem('eduplay_teacher_name');
-    localStorage.removeItem('eduplay_teacher_profile');
-    localStorage.removeItem('eduplay_student_session');
-
-    setTeacherEmail('vanquan18189@gmail.com');
-    setTeacherName(resolveTeacherNameByEmail('vanquan18189@gmail.com'));
-    setCurrentStudent(null);
-    setShowPortal(true);
     setActiveModule('lesson_5e');
   };
-
-  useEffect(() => {
-    const handleLogoutEvent = () => {
-      handleLogout();
-    };
-    window.addEventListener('eduplay_logout', handleLogoutEvent);
-    return () => window.removeEventListener('eduplay_logout', handleLogoutEvent);
-  }, []);
-
-  if (showPortal) {
-    return <PortalView onSelectPortal={handleSelectPortal} />;
-  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans antialiased selection:bg-indigo-500 selection:text-white">
@@ -486,9 +484,9 @@ export function App() {
           teacherEmail={teacherEmail}
           currentStudent={currentStudent}
           currentClass={currentClass}
-          userName={userRole === 'student' ? (currentStudent?.name || 'Hoàng Bảo An') : teacherName}
+          userName={userRole === 'student' ? (currentStudent?.name || 'Học sinh Khối 3') : teacherName}
           userEmail={teacherEmail}
-          onLogout={handleLogout}
+          onSwitchRole={(role, targetClass) => handleSwitchPortalMode(role, targetClass)}
         />
       </div>
 
