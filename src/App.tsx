@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { Sidebar, resolveUserDisplayName } from './components/Sidebar';
-import { FloatingAssistant } from './components/FloatingAssistant';
 import { StudentAssistantChat } from './components/StudentAssistantChat';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { PortalView } from './components/PortalView';
@@ -461,24 +460,28 @@ export function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans antialiased selection:bg-indigo-500 selection:text-white">
       
-      {/* Header Bar */}
-      <Header
-        userRole={userRole}
-        currentUserName={userRole === 'student' ? (currentStudent?.name || 'Hoàng Bảo An') : teacherName}
-        apiKey={apiKey}
-        onSaveApiKey={handleSaveApiKey}
-        isApiKeyModalOpen={isApiKeyModalOpen}
-        setIsApiKeyModalOpen={setIsApiKeyModalOpen}
-      />
+      {/* Sticky Top Header & Navigation Shell */}
+      <div className="sticky top-0 z-40 w-full">
+        {/* Header Bar */}
+        <Header
+          userRole={userRole}
+          currentUserName={userRole === 'student' ? (currentStudent?.name || 'Hoàng Bảo An') : teacherName}
+          apiKey={apiKey}
+          onSaveApiKey={handleSaveApiKey}
+          isApiKeyModalOpen={isApiKeyModalOpen}
+          setIsApiKeyModalOpen={setIsApiKeyModalOpen}
+        />
 
-      {/* Main Body with Sidebar + Content Area */}
-      <div className="flex-1 flex items-stretch overflow-x-auto max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 gap-4">
-        
-        {/* Sidebar Menu */}
+        {/* Unified Horizontal Topbar Navigation (Teacher & Student) */}
         <Sidebar
           activeModule={activeModule}
           onSelectModule={setActiveModule}
           userRole={userRole}
+          badgeCounts={{
+            lessonsCount: lessons5E.length,
+            assignmentsCount: assignments.length,
+            questionsCount: questionBank.length
+          }}
           teacherName={teacherName}
           teacherEmail={teacherEmail}
           currentStudent={currentStudent}
@@ -487,7 +490,10 @@ export function App() {
           userEmail={teacherEmail}
           onLogout={handleLogout}
         />
+      </div>
 
+      {/* Main Body */}
+      <div className="flex-1 flex flex-col max-w-[1400px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
         {/* Dynamic Module Content View */}
         <main className="flex-1 min-w-0 h-full">
           <ErrorBoundary fallbackTitle="Không thể tải phân hệ học tập này">
@@ -677,12 +683,8 @@ export function App() {
         </main>
       </div>
 
-      {/* Floating AI Assistant (Student vs Teacher) */}
-      {userRole === 'student' ? (
-        <StudentAssistantChat />
-      ) : (
-        <FloatingAssistant userRole={userRole} />
-      )}
+      {/* Floating AI Assistant (Only for Student) */}
+      {userRole === 'student' && <StudentAssistantChat />}
 
       {/* Reward Popup Toast with Quick Store Navigation */}
       <RewardToastNotification

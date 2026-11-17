@@ -1081,13 +1081,13 @@ export function cleanRawExamText(rawText: string): string[] {
 }
 
 /**
- * Student AI Assistant ("Bạn Cáo Học Tập")
+ * Student AI Assistant ("Trò chuyện cùng AI")
  */
 export async function askStudentAssistant(
   userQuery: string,
   history: { sender: 'user' | 'assistant'; text: string }[]
 ): Promise<string> {
-  const systemInstruction = `Bạn là "Bạn Cáo Học Tập" 🦊 - người bạn đồng hành và trợ lý AI nhỏ thân thiện dành riêng cho học sinh Tiểu học (Lớp 1 đến Lớp 5 theo chương trình "Kết nối tri thức với cuộc sống").
+  const systemInstruction = `Bạn là Trợ lý "Trò chuyện cùng AI" 🤖 - người bạn đồng hành và trợ lý AI nhỏ thân thiện dành riêng cho học sinh Tiểu học (Lớp 1 đến Lớp 5 theo chương trình "Kết nối tri thức với cuộc sống").
 
 QUY TẮC AN TOÀN VÀ PHẠM VI HỖ TRỢ BẮT BUỘC:
 1. ĐƯỢC PHÉP HỖ TRỢ:
@@ -1104,19 +1104,19 @@ QUY TẮC AN TOÀN VÀ PHẠM VI HỖ TRỢ BẮT BUỘC:
 
 3. GIỌNG VĂN:
    - Xưng hô thân thiện: "Mình" - "Bạn nhỏ" hoặc "Cậu" - "Tớ".
-   - Ngôn ngữ đơn giản, trong sáng, dễ hiểu với trẻ 6-11 tuổi, nhiều emoji vui tươi (🦊, ✨, 🌟, 📚, ❤️).
+   - Ngôn ngữ đơn giản, trong sáng, dễ hiểu với trẻ 6-11 tuổi, nhiều emoji vui tươi (🤖, ✨, 🌟, 📚, ❤️).
    - Luôn kiên nhẫn, khích lệ, không chê bai khi học sinh hỏi hoặc trả lời sai.`;
 
   const conversation = history
-    .map(h => `${h.sender === 'user' ? 'Học sinh' : 'Cáo Học Tập'}: ${h.text}`)
+    .map(h => `${h.sender === 'user' ? 'Học sinh' : 'Trợ lý AI'}: ${h.text}`)
     .join('\n');
 
-  const fullPrompt = `${conversation}\nHọc sinh: ${userQuery}\nCáo Học Tập:`;
+  const fullPrompt = `${conversation}\nHọc sinh: ${userQuery}\nTrợ lý AI:`;
 
   try {
     return await callGeminiApi(fullPrompt, systemInstruction, false);
   } catch (error) {
-    return `Chào bạn nhỏ! Cáo rất sẵn sàng giúp bạn ôn bài và giải đáp thắc mắc nhé. Bạn đang gặp khó khăn ở bài tập hay câu hỏi nào thế? 🦊✨`;
+    return `Chào bạn nhỏ! Trợ lý AI rất sẵn sàng giúp bạn ôn bài và giải đáp thắc mắc nhé. Bạn đang gặp khó khăn ở bài tập hay câu hỏi nào thế? 🤖✨`;
   }
 }
 

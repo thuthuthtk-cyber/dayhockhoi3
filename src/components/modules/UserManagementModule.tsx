@@ -3251,7 +3251,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
 
           {/* FIXED RIGHT COLUMN - AI ASSISTANT PANEL */}
           {isAiPanelOpen && (
-            <div className="w-full xl:w-96 shrink-0 bg-white rounded-3xl border border-slate-200/90 shadow-xl overflow-hidden flex flex-col max-h-[calc(100vh-140px)] sticky top-4 animate-slide-left transition-all">
+            <div className="w-full xl:w-96 shrink-0 bg-white rounded-3xl border border-slate-200/90 shadow-xl overflow-hidden flex flex-col max-h-[calc(100vh-148px)] sticky top-[128px] animate-slide-left transition-all">
               {/* Header */}
               <div className="p-4 bg-gradient-to-r from-indigo-700 via-purple-700 to-indigo-800 text-white flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2.5">
