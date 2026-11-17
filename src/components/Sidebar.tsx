@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Sparkles,
@@ -6,11 +6,10 @@ import {
   Database,
   Gamepad2,
   Users,
+  LogOut,
   SquarePen,
   Coins,
-  CheckCircle2,
-  GraduationCap,
-  ShieldCheck
+  CheckCircle2
 } from 'lucide-react';
 import { ActiveModule, UserRole, StudentRecord } from '../types';
 import { auth } from '../services/firebase';
@@ -53,7 +52,6 @@ interface SidebarProps {
   currentStudent?: StudentRecord | null;
   currentClass?: string;
   onLogout?: () => void;
-  onSwitchRole?: (role: UserRole, targetClass?: string) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -67,8 +65,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   teacherEmail: propTeacherEmail,
   currentStudent,
   currentClass,
-  onLogout,
-  onSwitchRole
+  onLogout
 }) => {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(auth?.currentUser || null);
   const [teachersList, setTeachersList] = useState<TeacherRecord[]>(() => getTeachersFromLocalStorage());
@@ -145,9 +142,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, []);
 
   // Điều hướng màn hình mặc định sang 'assignment' ("Bài Tập Của Tôi" / "Nhiệm Vụ Học Tập") ngay khi học sinh đăng nhập vào hệ thống
+  const autoSwitchedStudentRef = useRef<string | null>(null);
+
   const handleSelectModuleItem = (moduleId: ActiveModule) => {
     onSelectModule(moduleId);
   };
+
+  useEffect(() => {
+    if (userRole === 'student' && typeof window !== 'undefined') {
+      const studentSessionKey = currentStudent
+        ? `${currentStudent.id || currentStudent.code || currentStudent.name || 'student'}`
+        : 'guest-student';
+
+      if (autoSwitchedStudentRef.current !== studentSessionKey) {
+        autoSwitchedStudentRef.current = studentSessionKey;
+        if (activeModule !== 'assignment') {
+          onSelectModule('assignment');
+        }
+      }
+    }
+  }, [userRole, currentStudent, activeModule, onSelectModule]);
+
+  // Reset flag when logging out so subsequent logins also default to 'assignment'
+  useEffect(() => {
+    const handleLogoutReset = () => {
+      autoSwitchedStudentRef.current = null;
+    };
+    window.addEventListener('eduplay_logout', handleLogoutReset);
+    return () => {
+      window.removeEventListener('eduplay_logout', handleLogoutReset);
+    };
+  }, []);
 
   const studentMenuItems = [
     {
@@ -242,7 +267,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     propTeacherEmail ||
     firebaseUser?.email ||
     storedTeacherEmail ||
-    'thuthuthtk@gmail.com';
+    (userRole === 'admin' ? 'vanquan18189@gmail.com' : 'vanquan18189@gmail.com');
 
   const teacherProfile = getCurrentTeacherProfile(effectiveTeacherEmail);
   const effectiveTeacherRole = teacherProfile.userRole;
@@ -297,8 +322,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Student specific data
   const activeStudent = effectiveStudent || currentStudent;
-  const studentName = activeStudent?.name || activeStudent?.fullName || propUserName || 'Học sinh Lớp 3C';
-  const rawStudentClass = activeStudent?.className || currentClass || 'Lớp 3C';
+  const studentName = activeStudent?.name || activeStudent?.fullName || propUserName || 'Hoàng Bảo An';
+  const rawStudentClass = activeStudent?.className || currentClass || 'Lớp 3A';
   const cleanStudentClass = rawStudentClass.startsWith('Lớp') ? rawStudentClass : `Lớp ${rawStudentClass}`;
   const studentCoins = activeStudent?.coins ?? 1000;
 
@@ -401,41 +426,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
               </button>
 
-              {/* Quick Grade 3 Class Switcher (3C / 3D) */}
-              <div className="hidden sm:flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200">
-                {['Lớp 3C', 'Lớp 3D'].map((cls) => {
-                  const isClsActive = cleanStudentClass.toUpperCase() === cls.toUpperCase();
-                  return (
-                    <button
-                      key={cls}
-                      type="button"
-                      onClick={() => onSwitchRole?.('student', cls)}
-                      className={`px-2 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
-                        isClsActive
-                          ? 'bg-white text-[#4F46E5] shadow-2xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {cls.replace('Lớp ', '')}
-                    </button>
-                  );
-                })}
-              </div>
-
               <button
                 type="button"
                 onClick={() => {
-                  if (onSwitchRole) {
-                    onSwitchRole('admin');
-                  } else if (onLogout) {
+                  window.dispatchEvent(new CustomEvent('eduplay_logout'));
+                  if (onLogout) {
                     onLogout();
                   }
                 }}
-                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 text-[#4338CA] transition-colors text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                title="Chuyển sang Cổng Giáo Viên"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 text-slate-700 transition-colors text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                title="Đăng xuất hệ thống"
               >
-                <ShieldCheck className="w-3.5 h-3.5 text-[#4F46E5]" />
-                <span className="hidden sm:inline">Giáo viên</span>
+                <LogOut className="w-3.5 h-3.5 text-slate-400" />
+                <span className="hidden sm:inline">Đăng xuất</span>
               </button>
             </div>
           </div>
@@ -566,17 +569,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={() => {
-              if (onSwitchRole) {
-                onSwitchRole('student', 'Lớp 3C');
-              } else if (onLogout) {
+              window.dispatchEvent(new CustomEvent('eduplay_logout'));
+              if (onLogout) {
                 onLogout();
               }
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 text-[#4338CA] transition-colors text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-            title="Chuyển sang giao diện Học sinh Khối 3"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 text-slate-700 transition-colors text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+            title="Đăng xuất hệ thống"
           >
-            <GraduationCap className="w-3.5 h-3.5 text-[#4F46E5]" />
-            <span className="hidden sm:inline">Học sinh</span>
+            <LogOut className="w-3.5 h-3.5 text-slate-400" />
+            <span className="hidden sm:inline">Đăng xuất</span>
           </button>
         </div>
       </div>
