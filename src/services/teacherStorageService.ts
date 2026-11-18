@@ -503,8 +503,8 @@ export function resolveCurrentTeacherProfile(email?: string | null): TeacherProf
 
   const isAdmin = effectiveEmail.includes('admin');
   return {
-    id: effectiveEmail ? 'gv-custom' : '',
-    name: effectiveEmail ? resolveTeacherNameByEmail(effectiveEmail) : 'Giáo viên',
+    id: effectiveEmail ? 'gv-custom' : 'gv-12',
+    name: effectiveEmail ? resolveTeacherNameByEmail(effectiveEmail) : 'Nguyễn Thị Thu',
     email: effectiveEmail,
     role: isAdmin ? 'Quản trị viên (ADMIN)' : 'Giáo viên bộ môn',
     userRole: isAdmin ? 'admin' : 'teacher',

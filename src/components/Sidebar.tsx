@@ -236,16 +236,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const visibleItems = menuItems.filter(item => item.roles.includes(userRole));
 
   // Determine separate teacher session vs student session to prevent cross-overriding
-  const storedTeacherEmail =
-    typeof window !== 'undefined'
-      ? localStorage.getItem('eduplay_teacher_email') || sessionStorage.getItem('eduplay_teacher_email')
-      : null;
+  const storedTeacherEmail = typeof window !== 'undefined' ? localStorage.getItem('eduplay_teacher_email') : null;
+  const storedTeacherName = typeof window !== 'undefined' ? localStorage.getItem('eduplay_teacher_name') : null;
 
   const effectiveTeacherEmail =
     propTeacherEmail ||
     firebaseUser?.email ||
     storedTeacherEmail ||
-    '';
+    'thuthuthtk@gmail.com';
 
   const teacherProfile = getCurrentTeacherProfile(effectiveTeacherEmail);
   const effectiveTeacherRole = teacherProfile.userRole;
