@@ -2067,20 +2067,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
             <span>QUẢN LÝ GIÁO VIÊN & PHÂN QUYỆN (RBAC)</span>
           </button>
 
-          <button
-            onClick={() => {
-              setMainTab('promotion');
-            }}
-            className={`px-5 py-3 rounded-2xl font-black text-xs sm:text-sm flex items-center gap-2.5 transition-all cursor-pointer shadow-xs whitespace-nowrap ${
-              mainTab === 'promotion'
-                ? 'bg-gradient-to-r from-fuchsia-600 to-pink-600 text-white shadow-fuchsia-200 scale-102'
-                : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200/80'
-            }`}
-          >
-            <span className="text-base sm:text-lg">🎓</span>
-            <span>LÊN LỚP CUỐI NĂM (QUẢN TRỊ)</span>
-          </button>
-        </div>
+          </div>
 
         <div className="text-[11px] font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-xl self-end sm:self-center">
           Vai trò hiện tại: <span className="text-indigo-600 uppercase font-extrabold">{userRole}</span>
@@ -2119,13 +2106,6 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
 
                 {userRole !== 'student' && (
                   <div className="flex items-center gap-2.5 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => setMainTab('promotion')}
-                      className="px-4 py-2.5 rounded-xl text-xs font-black bg-gradient-to-r from-fuchsia-600 to-pink-600 hover:from-fuchsia-700 hover:to-pink-700 text-white transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95 whitespace-nowrap"
-                    >
-                      <span>🎓</span> Lên Lớp Cuối Năm
-                    </button>
                     <button
                       type="button"
                       onClick={async () => {
@@ -2168,12 +2148,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                     </button>
                     <button
                       type="button"
-                      disabled={!hasYearEnrollments}
                       onClick={() => {
-                        if (!hasYearEnrollments) {
-                          showToast(`Năm học ${selectedAcademicYear} chưa được phân lớp. Vui lòng chạy quy trình Lên Lớp Cuối Năm trước.`, 'error');
-                          return;
-                        }
                         const newId = `C-${Date.now()}`;
                         const newClass: ClassConfig = {
                           id: newId,
@@ -2184,11 +2159,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                         };
                         setEditingClass(newClass);
                       }}
-                      className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 whitespace-nowrap ${
-                        !hasYearEnrollments
-                          ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
-                          : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer active:scale-95'
-                      }`}
+                      className="px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95 whitespace-nowrap"
                     >
                       <Plus className="w-4 h-4" /> Thêm lớp mới
                     </button>
