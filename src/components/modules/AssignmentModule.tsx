@@ -616,7 +616,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
 
     const addSubKey = (s: any) => {
       if (!s) return;
-      const k = (s.studentId || s.studentCode || s.maHs || s.code || s.studentName || s.name || '').trim().toLowerCase();
+      const k = (s.studentCode || s.maHs || s.studentId || s.code || '').trim().toLowerCase();
       if (k) uniqueStudentKeys.add(k);
     };
 
@@ -4917,7 +4917,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
                     Sửa Cài Đặt Giao Bài Tập
                   </h3>
                   <p className="text-xs text-indigo-200 font-medium">
-                    {editingConfigAssignment.title} • {editingConfigAssignment.grade || 'Khối 4'} • Môn {editingConfigAssignment.subject}
+                    {editingConfigAssignment.title} • {editingConfigAssignment.grade || 'Khối 3'} • Môn {editingConfigAssignment.subject}
                   </p>
                 </div>
               </div>

@@ -952,23 +952,20 @@ export const StudentExamModule: React.FC<StudentExamModuleProps> = ({
           const matchedSub = ex.submissions.find((s: any) => {
             if (!s) return false;
             const candidates = [
-              s.studentId,
               s.studentCode,
               s.maHs,
               s.code,
+              s.studentId,
               s.sddcn,
-              s.userId,
-              s.studentName,
-              s.name
+              s.userId
             ].filter(Boolean).map(c => normalizeStudentCode(String(c)));
 
             const targetKeys = [
               authenticStudentCode,
-              normalizeStudentCode(currentUserId || ''),
-              (effectiveStudentName || '').toLowerCase().trim()
+              normalizeStudentCode(currentUserId || '')
             ].filter(Boolean);
 
-            return candidates.some(c => targetKeys.includes(c) || c.toLowerCase() === (effectiveStudentName || '').toLowerCase().trim());
+            return candidates.some(c => targetKeys.includes(c));
           });
 
           if (matchedSub) {
@@ -1344,20 +1341,17 @@ export const StudentExamModule: React.FC<StudentExamModuleProps> = ({
         const matchedSub = ex.submissions.find((s: any) => {
           if (!s) return false;
           const candidates = [
-            s.studentId,
             s.studentCode,
             s.maHs,
             s.code,
-            s.userId,
-            s.studentName,
-            s.name,
-            s.sddcn
+            s.studentId,
+            s.sddcn,
+            s.userId
           ].filter(Boolean).map(c => String(c).trim().toLowerCase());
 
           const targetKeys = [
             effectiveStudentCode.toLowerCase().trim(),
-            (currentUserId || '').toLowerCase().trim(),
-            (effectiveStudentName || '').toLowerCase().trim()
+            (currentUserId || '').toLowerCase().trim()
           ].filter(Boolean);
 
           return candidates.some(c => targetKeys.includes(c));

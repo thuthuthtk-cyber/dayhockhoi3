@@ -23,7 +23,7 @@ export type CognitiveLevel =
   | string;
 
 export type Subject = 'Công nghệ' | 'Tin học' | 'Toán học' | 'Toán' | 'Tiếng Việt' | 'Khoa học tự nhiên' | 'Khoa học' | 'Lịch sử & Địa lý' | 'Tiếng Anh' | string;
-export type Grade = 'Khối 1' | 'Khối 2' | 'Khối 3' | 'Khối 4' | 'Khối 5' | 'Khối 6' | 'Khối 7' | 'Khối 8' | 'Khối 9' | string;
+export type Grade = 'Khối 3' | string;
 
 export interface UserProfile {
   uid: string;
@@ -505,19 +505,11 @@ export const SUBJECT_OPTIONS = [
 ];
 
 export const GRADE_OPTIONS = [
-  'Khối 1',
-  'Khối 2',
-  'Khối 3',
-  'Khối 4',
-  'Khối 5'
+  'Khối 3'
 ];
 
 export const CLASS_OPTIONS = [
-  'Lớp 1A', 'Lớp 1B',
-  'Lớp 2A', 'Lớp 2B',
-  'Lớp 3A', 'Lớp 3B',
-  'Lớp 4A', 'Lớp 4B',
-  'Lớp 5A', 'Lớp 5B'
+  'Lớp 3C', 'Lớp 3D'
 ];
 
 export const LEVEL_OPTIONS: QuestionLevel[] = [

@@ -97,7 +97,7 @@ export const UserManager: React.FC<UserManagerProps> = ({ onActivityAdded }) => 
             <Users className="w-6 h-6 text-[#3730A3]" />
             Quản Lý Người Dùng & Danh Sách Học Sinh
           </h2>
-          <p className="text-xs text-slate-500 mt-1">Phân quyền vai trò: Quản trị (Admin) • Giáo viên • Học sinh (Khối 1 - Khối 5)</p>
+          <p className="text-xs text-slate-500 mt-1">Phân quyền vai trò: Quản trị (Admin) • Giáo viên • Học sinh (Khối 3)</p>
         </div>
 
         {/* Accent Orange Primary Action */}

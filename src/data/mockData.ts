@@ -15,15 +15,7 @@ export const SUBJECTS: Subject[] = [
 ];
 
 export const GRADES: Grade[] = [
-  'Khối 1',
-  'Khối 2',
   'Khối 3',
-  'Khối 4',
-  'Khối 5',
-  'Khối 6',
-  'Khối 7',
-  'Khối 8',
-  'Khối 9',
 ];
 
 export const COGNITIVE_LEVELS: { id: string; label: string; count: number; color: string; badgeClass: string }[] = [

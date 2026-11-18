@@ -21,37 +21,13 @@ export interface SchoolClassItem {
  * Danh sách môn học tiêu chuẩn theo từng Khối lớp Tiểu học (Chương trình GDPT 2018)
  */
 export const STANDARD_GRADE_SUBJECTS: Record<string, string[]> = {
-  'Khối 1': ['Toán', 'Tiếng Việt', 'Tiếng Anh', 'Tự nhiên và Xã hội', 'Đạo đức', 'Âm nhạc', 'Mĩ thuật', 'Giáo dục thể chất', 'Hoạt động trải nghiệm'],
-  'Khối 2': ['Toán', 'Tiếng Việt', 'Tiếng Anh', 'Tự nhiên và Xã hội', 'Đạo đức', 'Âm nhạc', 'Mĩ thuật', 'Giáo dục thể chất', 'Hoạt động trải nghiệm'],
-  'Khối 3': ['Toán', 'Tiếng Việt', 'Tiếng Anh', 'Tin học', 'Công nghệ', 'Tự nhiên và Xã hội', 'Đạo đức', 'Âm nhạc', 'Mĩ thuật', 'Giáo dục thể chất', 'Hoạt động trải nghiệm'],
-  'Khối 4': ['Toán', 'Tiếng Việt', 'Tiếng Anh', 'Tin học', 'Công nghệ', 'Khoa học', 'Lịch sử và Địa lí', 'Đạo đức', 'Âm nhạc', 'Mĩ thuật', 'Giáo dục thể chất', 'Hoạt động trải nghiệm'],
-  'Khối 5': ['Toán', 'Tiếng Việt', 'Tiếng Anh', 'Tin học', 'Công nghệ', 'Khoa học', 'Lịch sử và Địa lí', 'Đạo đức', 'Âm nhạc', 'Mĩ thuật', 'Giáo dục thể chất', 'Hoạt động trải nghiệm']
+  'Khối 3': ['Toán', 'Tiếng Việt', 'Tiếng Anh', 'Tin học', 'Công nghệ', 'Tự nhiên và Xã hội', 'Đạo đức', 'Âm nhạc', 'Mĩ thuật', 'Giáo dục thể chất', 'Hoạt động trải nghiệm']
 };
 
-// Default real primary school classes (TH Quang Hưng - Khối 1 đến Khối 5)
+// Default classes (chỉ giữ lại Khối 3)
 export const REAL_SCHOOL_CLASSES_FALLBACK: SchoolClassItem[] = [
-  { id: '1A', name: 'Lớp 1A', grade: 'Khối 1', room: 'Phòng 101', subjects: STANDARD_GRADE_SUBJECTS['Khối 1'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '1B', name: 'Lớp 1B', grade: 'Khối 1', room: 'Phòng 102', subjects: STANDARD_GRADE_SUBJECTS['Khối 1'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '1C', name: 'Lớp 1C', grade: 'Khối 1', room: 'Phòng 103', subjects: STANDARD_GRADE_SUBJECTS['Khối 1'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '1D', name: 'Lớp 1D', grade: 'Khối 1', room: 'Phòng 104', subjects: STANDARD_GRADE_SUBJECTS['Khối 1'].map(s => ({ isVisible: true, subjectName: s })) },
-  
-  { id: '2A', name: 'Lớp 2A', grade: 'Khối 2', room: 'Phòng 201', subjects: STANDARD_GRADE_SUBJECTS['Khối 2'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '2B', name: 'Lớp 2B', grade: 'Khối 2', room: 'Phòng 202', subjects: STANDARD_GRADE_SUBJECTS['Khối 2'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '2C', name: 'Lớp 2C', grade: 'Khối 2', room: 'Phòng 203', subjects: STANDARD_GRADE_SUBJECTS['Khối 2'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '2D', name: 'Lớp 2D', grade: 'Khối 2', room: 'Phòng 204', subjects: STANDARD_GRADE_SUBJECTS['Khối 2'].map(s => ({ isVisible: true, subjectName: s })) },
-  
   { id: '3C', name: 'Lớp 3C', grade: 'Khối 3', room: 'Phòng 303', subjects: STANDARD_GRADE_SUBJECTS['Khối 3'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '3D', name: 'Lớp 3D', grade: 'Khối 3', room: 'Phòng 304', subjects: STANDARD_GRADE_SUBJECTS['Khối 3'].map(s => ({ isVisible: true, subjectName: s })) },
-  
-  { id: '4A', name: 'Lớp 4A', grade: 'Khối 4', room: 'Phòng 401', subjects: STANDARD_GRADE_SUBJECTS['Khối 4'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '4B', name: 'Lớp 4B', grade: 'Khối 4', room: 'Phòng 402', subjects: STANDARD_GRADE_SUBJECTS['Khối 4'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '4C', name: 'Lớp 4C', grade: 'Khối 4', room: 'Phòng 403', subjects: STANDARD_GRADE_SUBJECTS['Khối 4'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '4D', name: 'Lớp 4D', grade: 'Khối 4', room: 'Phòng 404', subjects: STANDARD_GRADE_SUBJECTS['Khối 4'].map(s => ({ isVisible: true, subjectName: s })) },
-  
-  { id: '5A', name: 'Lớp 5A', grade: 'Khối 5', room: 'Phòng 501', subjects: STANDARD_GRADE_SUBJECTS['Khối 5'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '5B', name: 'Lớp 5B', grade: 'Khối 5', room: 'Phòng 502', subjects: STANDARD_GRADE_SUBJECTS['Khối 5'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '5C', name: 'Lớp 5C', grade: 'Khối 5', room: 'Phòng 503', subjects: STANDARD_GRADE_SUBJECTS['Khối 5'].map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '5D', name: 'Lớp 5D', grade: 'Khối 5', room: 'Phòng 504', subjects: STANDARD_GRADE_SUBJECTS['Khối 5'].map(s => ({ isVisible: true, subjectName: s })) }
+  { id: '3D', name: 'Lớp 3D', grade: 'Khối 3', room: 'Phòng 304', subjects: STANDARD_GRADE_SUBJECTS['Khối 3'].map(s => ({ isVisible: true, subjectName: s })) }
 ];
 
 /**
@@ -94,9 +70,10 @@ export function subscribeRealtimeClasses(callback: (classes: SchoolClassItem[]) 
           const name = formatClassName(rawName);
           const rawGrade = (data.grade || '').trim();
           const digit = extractGradeDigit(rawGrade) || extractGradeDigit(name);
-          const grade = rawGrade || (digit ? `Khối ${digit}` : 'Khối 1');
+          if (digit !== '3') return;
+          const grade = 'Khối 3';
           
-          // Normalized key for deduplication (e.g. "3C", "5D")
+          // Normalized key for deduplication (e.g. "3C", "3D")
           const cleanSuffix = name.replace(/^Lớp\s*/i, '').trim().toUpperCase();
           const normalizedKey = cleanSuffix || rawId.toUpperCase();
           const standardId = normalizedKey;
@@ -109,7 +86,7 @@ export function subscribeRealtimeClasses(callback: (classes: SchoolClassItem[]) 
             homeroomTeacher: data.homeroomTeacher || '',
             subjects: Array.isArray(data.subjects) && data.subjects.length > 0
               ? data.subjects
-              : (STANDARD_GRADE_SUBJECTS[grade] || STANDARD_GRADE_SUBJECTS['Khối 5']).map(s => ({ isVisible: true, subjectName: s }))
+              : STANDARD_GRADE_SUBJECTS['Khối 3'].map(s => ({ isVisible: true, subjectName: s }))
           };
 
           // If item already exists, merge fields favoring non-empty ones
@@ -250,7 +227,13 @@ export function useClassesList() {
         const cached = localStorage.getItem('eduplay_classes_config');
         if (cached) {
           const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const grade3Only = parsed.filter((c: any) => {
+              const d = extractGradeDigit(c?.grade) || extractGradeDigit(c?.name);
+              return d === '3';
+            });
+            if (grade3Only.length > 0) return grade3Only;
+          }
         }
       }
     } catch {}
@@ -265,7 +248,13 @@ export function useClassesList() {
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setClasses(parsed);
+            const grade3Only = parsed.filter((c: any) => {
+              const d = extractGradeDigit(c?.grade) || extractGradeDigit(c?.name);
+              return d === '3';
+            });
+            if (grade3Only.length > 0) {
+              setClasses(grade3Only);
+            }
           }
         }
       } catch {}

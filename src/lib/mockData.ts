@@ -1,14 +1,14 @@
 import { LessonPlan, Question, ExamMatrix, HomeworkAssignment, StudentReport, ActivityLog, UserProfile } from '../types';
 
 export const INITIAL_USERS: UserProfile[] = [
-  { uid: 'u_teacher1', displayName: 'Thầy Nguyễn Văn Minh', email: 'nguyenvanminh@tieuhoc.edu.vn', role: 'teacher', grade: 'Khối 3', className: 'Lớp 3A' },
-  { uid: 'u_teacher2', displayName: 'Cô Trần Thị Hương', email: 'tranthihuong@tieuhoc.edu.vn', role: 'teacher', grade: 'Khối 4', className: 'Lớp 4B' },
+  { uid: 'u_teacher1', displayName: 'Thầy Nguyễn Văn Minh', email: 'nguyenvanminh@tieuhoc.edu.vn', role: 'teacher', grade: 'Khối 3', className: 'Lớp 3C' },
+  { uid: 'u_teacher2', displayName: 'Cô Trần Thị Hương', email: 'tranthihuong@tieuhoc.edu.vn', role: 'teacher', grade: 'Khối 3', className: 'Lớp 3D' },
   { uid: 'u_admin', displayName: 'Ban Giám Hiệu (Admin)', email: 'admin@tieuhoc.edu.vn', role: 'admin' },
-  { uid: 'u_student1', displayName: 'Lê Hoàng Nam', email: 'hoangnam@student.edu.vn', role: 'student', grade: 'Khối 3', className: 'Lớp 3A' },
-  { uid: 'u_student2', displayName: 'Phạm Minh Anh', email: 'minhanh@student.edu.vn', role: 'student', grade: 'Khối 3', className: 'Lớp 3A' },
-  { uid: 'u_student3', displayName: 'Vũ Đức Trí', email: 'ductri@student.edu.vn', role: 'student', grade: 'Khối 3', className: 'Lớp 3A' },
-  { uid: 'u_student4', displayName: 'Nguyễn Bích Ngọc', email: 'bichngoc@student.edu.vn', role: 'student', grade: 'Khối 4', className: 'Lớp 4B' },
-  { uid: 'u_student5', displayName: 'Đặng Tuấn Kiệt', email: 'tuankiet@student.edu.vn', role: 'student', grade: 'Khối 5', className: 'Lớp 5A' },
+  { uid: 'u_student1', displayName: 'Lê Hoàng Nam', email: 'hoangnam@student.edu.vn', role: 'student', grade: 'Khối 3', className: 'Lớp 3C' },
+  { uid: 'u_student2', displayName: 'Phạm Minh Anh', email: 'minhanh@student.edu.vn', role: 'student', grade: 'Khối 3', className: 'Lớp 3C' },
+  { uid: 'u_student3', displayName: 'Vũ Đức Trí', email: 'ductri@student.edu.vn', role: 'student', grade: 'Khối 3', className: 'Lớp 3D' },
+  { uid: 'u_student4', displayName: 'Nguyễn Bích Ngọc', email: 'bichngoc@student.edu.vn', role: 'student', grade: 'Khối 3', className: 'Lớp 3D' },
+  { uid: 'u_student5', displayName: 'Đặng Tuấn Kiệt', email: 'tuankiet@student.edu.vn', role: 'student', grade: 'Khối 3', className: 'Lớp 3C' },
 ];
 
 export const INITIAL_LESSON_PLANS: LessonPlan[] = [
@@ -44,7 +44,7 @@ export const INITIAL_LESSON_PLANS: LessonPlan[] = [
     id: 'lp_3',
     title: 'Sử dụng Internet an toàn và hiệu quả',
     subject: 'Tin học',
-    grade: 'Khối 4',
+    grade: 'Khối 3',
     durationMinutes: 35,
     warmup: 'Xem video hoạt hình ngắn về cậu bé Miu gặp người lạ trên mạng Internet.',
     exploration: 'Giáo viên nêu các quy tắc vàng: Không chia sẻ mật khẩu, không đăng ảnh cá nhân khi chưa hỏi bố mẹ, không bấm vào liên kết lạ.',
@@ -149,7 +149,7 @@ export const INITIAL_QUESTIONS: Question[] = [
   {
     id: 'q_7',
     subject: 'Tin học',
-    grade: 'Khối 4',
+    grade: 'Khối 3',
     topic: 'Thiết bị máy tính',
     level: 'Nhận biết',
     type: 'choice',
@@ -163,7 +163,7 @@ export const INITIAL_QUESTIONS: Question[] = [
   {
     id: 'q_8',
     subject: 'Tin học',
-    grade: 'Khối 4',
+    grade: 'Khối 3',
     topic: 'An toàn thông tin',
     level: 'Vận dụng',
     type: 'choice',
@@ -321,7 +321,7 @@ export const INITIAL_ACTIVITIES: ActivityLog[] = [
     userDisplayName: 'Cô Trần Thị Hương',
     userRole: 'Giáo viên',
     actionType: 'Tạo đề kiểm tra',
-    description: 'Vừa tạo Ma trận đề kiểm tra Giữa Kỳ I môn Tin học Khối 4',
+    description: 'Vừa tạo Ma trận đề kiểm tra Giữa Kỳ I môn Tin học Khối 3',
     createdAt: '15 phút trước'
   },
   {

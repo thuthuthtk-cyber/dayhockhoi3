@@ -30,17 +30,16 @@ interface ClassItem {
 }
 
 const DEFAULT_FALLBACK_CLASSES: ClassItem[] = [
-  { id: '1C', grade: 'Khối 1', name: 'Lớp 1C', room: 'Phòng 101' },
-  { id: '1D', grade: 'Khối 1', name: 'Lớp 1D', room: 'Phòng 102' },
-  { id: '2C', grade: 'Khối 2', name: 'Lớp 2C', room: 'Phòng 201' },
-  { id: '2D', grade: 'Khối 2', name: 'Lớp 2D', room: 'Phòng 202' },
-  { id: '3C', grade: 'Khối 3', name: 'Lớp 3C', room: 'Phòng 301' },
-  { id: '3D', grade: 'Khối 3', name: 'Lớp 3D', room: 'Phòng 302' },
-  { id: '4C', grade: 'Khối 4', name: 'Lớp 4C', room: 'Phòng 401' },
-  { id: '4D', grade: 'Khối 4', name: 'Lớp 4D', room: 'Phòng 402' },
-  { id: '5C', grade: 'Khối 5', name: 'Lớp 5C', room: 'Phòng 501' },
-  { id: '5D', grade: 'Khối 5', name: 'Lớp 5D', room: 'Phòng 502' }
+  { id: '3C', grade: 'Khối 3', name: 'Lớp 3C', room: 'Phòng 303' },
+  { id: '3D', grade: 'Khối 3', name: 'Lớp 3D', room: 'Phòng 304' }
 ];
+
+const isGrade3Item = (c: { grade?: string; name?: string; id?: string }): boolean => {
+  const gMatch = (c.grade || '').match(/\d+/);
+  if (gMatch) return gMatch[0] === '3';
+  const nMatch = (c.name || c.id || '').match(/\d+/);
+  return nMatch ? nMatch[0] === '3' : false;
+};
 
 /**
  * Helper to extract grade number from a lesson object
@@ -105,12 +104,15 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((c: any) => ({
-            id: c.id || c.name,
-            name: (c.name || c.className || '').trim(),
-            grade: (c.grade || '').trim(),
-            room: c.room || ''
-          }));
+          const grade3 = parsed
+            .map((c: any) => ({
+              id: c.id || c.name,
+              name: (c.name || c.className || '').trim(),
+              grade: (c.grade || '').trim(),
+              room: c.room || ''
+            }))
+            .filter(isGrade3Item);
+          if (grade3.length > 0) return grade3;
         }
       }
     } catch {}
@@ -149,11 +151,13 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
             const rawName = (data.name || data.className || rawId || '').trim();
             const cleanName = rawName.startsWith('Lớp ') ? rawName : `Lớp ${rawName}`;
             const key = cleanName.replace(/^Lớp\s*/i, '').trim().toUpperCase();
+            const gradeStr = (data.grade || '').trim();
+            if (!isGrade3Item({ grade: gradeStr, name: cleanName, id: key })) return;
             if (!map.has(key)) {
               map.set(key, {
                 id: key,
                 name: cleanName,
-                grade: (data.grade || '').trim(),
+                grade: 'Khối 3',
                 room: data.room || ''
               });
             }

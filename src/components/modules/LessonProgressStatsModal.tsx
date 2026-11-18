@@ -46,7 +46,7 @@ export const LessonProgressStatsModal: React.FC<LessonProgressStatsModalProps> =
   // Derive lesson details
   const lessonTitle = lesson?.title || 'Bài giảng';
   const subject = lesson?.subject || 'Công nghệ';
-  const grade = lesson?.grade || 'Khối 5';
+  const grade = lesson?.grade || 'Khối 3';
 
   // Compute student progress dataset purely from actual assigned students & real progress records
   const { students, targetClasses, assignedDateStr } = useMemo(() => {

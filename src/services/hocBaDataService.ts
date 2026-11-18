@@ -335,17 +335,15 @@ export function invalidateAllSubmissionsCache(): void {
  */
 export function getStudentCandidateIdentifiers(
   studentId?: string,
-  studentCode?: string,
-  studentName?: string
+  studentCode?: string
 ): { candidateIds: Set<string>; normName: string } {
-  const cacheKey = `${studentId || ''}_${studentCode || ''}_${studentName || ''}`;
+  const cacheKey = `${studentId || ''}_${studentCode || ''}`;
   const cachedResult = candidateIdentifiersCache.get(cacheKey);
   if (cachedResult) {
     return cachedResult;
   }
 
   const candidateIds = new Set<string>();
-  const normName = (studentName || '').trim().toLowerCase();
 
   const addIdVariations = (idVal?: string) => {
     if (!idVal) return;
@@ -390,15 +388,11 @@ export function getStudentCandidateIdentifiers(
       const sessRaw = localStorage.getItem('eduplay_student_session');
       if (sessRaw) {
         const sess = JSON.parse(sessRaw);
-        const sName = (sess.name || sess.fullName || '').trim().toLowerCase();
-        const matchesSession =
-          !normName ||
-          normName === 'học sinh' ||
-          (sName && (sName === normName || sName.includes(normName) || normName.includes(sName))) ||
+        if (
           (sess.id && candidateIds.has(sess.id)) ||
-          (sess.code && candidateIds.has(sess.code));
-
-        if (matchesSession) {
+          (sess.code && candidateIds.has(sess.code)) ||
+          ((sess as any).studentCode && candidateIds.has((sess as any).studentCode))
+        ) {
           addIdVariations(sess.id);
           addIdVariations(sess.code);
           addIdVariations((sess as any).studentCode);
@@ -407,44 +401,20 @@ export function getStudentCandidateIdentifiers(
         }
       }
     } catch {}
-
-    // Quét danh sách học sinh lưu trong LocalStorage để tìm khớp tên nếu có
-    if (normName && normName !== 'học sinh') {
-      try {
-        const allDbRaw = localStorage.getItem('eduplay_all_students_db');
-        if (allDbRaw) {
-          const parsed = JSON.parse(allDbRaw);
-          const list = Array.isArray(parsed) ? parsed : (typeof parsed === 'object' ? Object.values(parsed).flat() : []);
-          if (Array.isArray(list)) {
-            const matched = list.find((st: any) => {
-              const sName = (st.fullName || st.name || '').trim().toLowerCase();
-              return sName === normName || sName.includes(normName) || normName.includes(sName);
-            });
-            if (matched) {
-              addIdVariations(matched.id);
-              addIdVariations(matched.code);
-              addIdVariations((matched as any).studentCode);
-              addIdVariations((matched as any).username);
-            }
-          }
-        }
-      } catch {}
-    }
   }
 
-  // Tương thích dự phòng mã 'u-4' nếu khớp session, không có mã rõ ràng hoặc tài khoản khách
+  // Tương thích dự phòng mã 'u-4' nếu không có mã rõ ràng hoặc tài khoản khách
   if (
     candidateIds.has('u-4') ||
     studentId === 'u-4' ||
     studentCode === 'u-4' ||
-    normName.includes('lê minh anh') ||
     candidateIds.size === 0 ||
     (!studentId && !studentCode)
   ) {
     candidateIds.add('u-4');
   }
 
-  const result = { candidateIds, normName };
+  const result = { candidateIds, normName: '' };
   candidateIdentifiersCache.set(cacheKey, result);
   return result;
 }
@@ -454,8 +424,7 @@ export function getStudentCandidateIdentifiers(
  */
 export function isSubmissionBelongsToStudent(
   sub: any,
-  studentCodeOrIds: string | Set<string>,
-  normName?: string
+  studentCodeOrIds: string | Set<string>
 ): boolean {
   if (!sub) return false;
   const subCode = normalizeStudentCode(sub.studentCode || sub.code || sub.maHs || sub.studentId || '');
@@ -471,14 +440,12 @@ export function isSubmissionBelongsToStudent(
     const candidateIds = studentCodeOrIds;
     const sId = (sub.studentId || sub.id || sub.userId || '').trim();
     const sCode = (sub.studentCode || sub.code || sub.maHs || '').trim();
-    const sName = (sub.studentName || sub.name || '').trim().toLowerCase();
 
     if (sId && candidateIds.has(sId)) return true;
     if (sId && candidateIds.has(sId.toLowerCase())) return true;
     if (sCode && candidateIds.has(sCode)) return true;
     if (sCode && candidateIds.has(sCode.toLowerCase())) return true;
     if (subCode && candidateIds.has(subCode)) return true;
-    if (normName && sName && (sName === normName || sName.includes(normName) || normName.includes(sName))) return true;
     return false;
   }
   return false;
@@ -679,7 +646,7 @@ export function getStudentHomeworkSubmissions(
     } catch {}
   }
 
-  const { candidateIds, normName } = getStudentCandidateIdentifiers(studentId, studentCode, studentName);
+  const { candidateIds } = getStudentCandidateIdentifiers(studentId, studentCode);
   const results: Array<{
     assignmentId: string;
     subject: string;
@@ -735,7 +702,7 @@ export function getStudentHomeworkSubmissions(
     if (typeof window !== 'undefined') {
       const cache = getGlobalSubmissionsCache();
       cache.homeworkSubs.forEach((sub: any) => {
-        if (isSubmissionBelongsToStudent(sub, candidateIds, normName)) {
+        if (isSubmissionBelongsToStudent(sub, candidateIds)) {
           addSubmissionIfValid(sub);
         }
       });
@@ -749,7 +716,7 @@ export function getStudentHomeworkSubmissions(
     assignments.forEach(as => {
       if (as && as.submissions && Array.isArray(as.submissions)) {
         as.submissions.forEach(sub => {
-          if (isSubmissionBelongsToStudent(sub, candidateIds, normName)) {
+          if (isSubmissionBelongsToStudent(sub, candidateIds)) {
             addSubmissionIfValid(sub, as);
           }
         });

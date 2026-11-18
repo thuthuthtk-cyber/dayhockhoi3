@@ -87,7 +87,7 @@ export async function joinQuizLiveSession(params: {
     targetId,
     targetTitle,
     subject = 'Tin học',
-    grade = 'Khối 5',
+    grade = 'Khối 3',
     studentId,
     studentName,
     studentClass,

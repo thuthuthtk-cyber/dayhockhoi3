@@ -346,7 +346,7 @@ export const QuestionAiModal: React.FC<QuestionAiModalProps> = ({
                         type="button"
                         onClick={() => {
                           setQuickLessonName('Chủ đề: Thiết bị Vào - Ra');
-                          setQuickGrade('Khối 4');
+                          setQuickGrade('Khối 3');
                           setQuickSubject('Tin học');
                           setQuickRawText(`Câu 1: Thiết bị nào sau đây là thiết bị vào?
 A. Chuột

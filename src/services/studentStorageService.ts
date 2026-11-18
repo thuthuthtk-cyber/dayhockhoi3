@@ -341,33 +341,42 @@ export function getStudentsFromLocalStorage(className: string): StudentRecord[] 
     const stdName = getStandardClassName(className);
     const key = normalizeClassKey(className);
 
+    // If explicitly cleared, return []
+    if (localStorage.getItem(`eduplay_cleared_${key}`) === 'true' || localStorage.getItem(`eduplay_cleared_${key.toLowerCase()}`) === 'true') {
+      return [];
+    }
+
     // 1. Check direct per-class key (e.g. eduplay_students_5b, eduplay_students_3c)
     const directData = localStorage.getItem(`eduplay_students_${key}`) || localStorage.getItem(`eduplay_students_${key.toLowerCase()}`);
-    if (directData) {
-      const parsed = JSON.parse(directData);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return deduplicateAndNormalizeStudents(parsed, stdName);
-      }
+    if (directData !== null) {
+      try {
+        const parsed = JSON.parse(directData);
+        if (Array.isArray(parsed)) {
+          return deduplicateAndNormalizeStudents(parsed, stdName);
+        }
+      } catch {}
     }
 
     // 2. Check full database key (eduplay_students_database)
     const fullDbData = localStorage.getItem(EDUPLAY_STUDENTS_DB_KEY);
     if (fullDbData) {
-      const parsedDb = JSON.parse(fullDbData);
-      if (parsedDb && typeof parsedDb === 'object') {
-        if (Array.isArray(parsedDb[stdName]) && parsedDb[stdName].length > 0) {
-          return deduplicateAndNormalizeStudents(parsedDb[stdName], stdName);
+      try {
+        const parsedDb = JSON.parse(fullDbData);
+        if (parsedDb && typeof parsedDb === 'object') {
+          if (Array.isArray(parsedDb[stdName])) {
+            return deduplicateAndNormalizeStudents(parsedDb[stdName], stdName);
+          }
+          if (Array.isArray(parsedDb[key])) {
+            return deduplicateAndNormalizeStudents(parsedDb[key], stdName);
+          }
+          if (Array.isArray(parsedDb[key.toLowerCase()])) {
+            return deduplicateAndNormalizeStudents(parsedDb[key.toLowerCase()], stdName);
+          }
         }
-        if (Array.isArray(parsedDb[key]) && parsedDb[key].length > 0) {
-          return deduplicateAndNormalizeStudents(parsedDb[key], stdName);
-        }
-        if (Array.isArray(parsedDb[key.toLowerCase()]) && parsedDb[key.toLowerCase()].length > 0) {
-          return deduplicateAndNormalizeStudents(parsedDb[key.toLowerCase()], stdName);
-        }
-      }
+      } catch {}
     }
 
-    // 3. Fallback danh sách mặc định chuẩn hóa theo sĩ số lớp
+    // 3. Fallback danh sách mặc định chuẩn hóa theo sĩ số lớp (chỉ khi chưa từng lưu/xóa)
     if (key === '3C' || stdName.includes('3C')) {
       const defaultRoster = getDefault3CRoster();
       try {
@@ -492,6 +501,11 @@ export function saveStudentsToLocalStorage(className: string, students: StudentR
   try {
     const stdName = getStandardClassName(className);
     const key = normalizeClassKey(className);
+
+    // Clear any explicit cleared marker when saving new students
+    localStorage.removeItem(`eduplay_cleared_${key}`);
+    localStorage.removeItem(`eduplay_cleared_${key.toLowerCase()}`);
+
     const cleaned = deduplicateAndNormalizeStudents(students, stdName);
 
     // 1. Save to direct per-class key (e.g. eduplay_students_5b)
@@ -616,19 +630,41 @@ export function clearAllStudentsInClass(className: string): { success: boolean; 
   try {
     const stdName = getStandardClassName(className);
     const classKey = normalizeClassKey(className);
+
+    localStorage.setItem(`eduplay_cleared_${classKey}`, 'true');
+    localStorage.setItem(`eduplay_cleared_${classKey.toLowerCase()}`, 'true');
     saveStudentsToLocalStorage(stdName, []);
-    localStorage.removeItem(`eduplay_students_${classKey}`);
-    localStorage.removeItem(`eduplay_students_${classKey.toLowerCase()}`);
+    localStorage.setItem(`eduplay_students_${classKey}`, JSON.stringify([]));
+    localStorage.setItem(`eduplay_students_${classKey.toLowerCase()}`, JSON.stringify([]));
+
+    let fullDb: Record<string, StudentRecord[]> = {};
+    const fullDbData = localStorage.getItem(EDUPLAY_STUDENTS_DB_KEY);
+    if (fullDbData) {
+      try {
+        fullDb = JSON.parse(fullDbData) || {};
+      } catch {}
+    }
+    fullDb[stdName] = [];
+    fullDb[classKey] = [];
+    localStorage.setItem(EDUPLAY_STUDENTS_DB_KEY, JSON.stringify(fullDb));
+
     syncClassStudentsToFirestore(stdName, []).catch(() => {});
 
     window.dispatchEvent(
       new CustomEvent('student-data-updated', {
         detail: {
           className: stdName,
+          classKey,
           action: 'all-cleared',
           count: 0,
+          students: [],
           timestamp: Date.now()
         }
+      })
+    );
+    window.dispatchEvent(
+      new CustomEvent('eduplay_students_updated', {
+        detail: { className: stdName, classKey, count: 0, action: 'all-cleared' }
       })
     );
 

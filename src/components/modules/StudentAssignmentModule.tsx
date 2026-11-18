@@ -545,8 +545,7 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
       const filtered = existingSubs.filter((s: any) => 
         (s.studentId || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
         (s.studentCode || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
-        (s.maHs || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
-        (s.studentName || '').toLowerCase() !== (effectiveUserName || '').toLowerCase()
+        (s.maHs || '').toLowerCase() !== effectiveUserId.toLowerCase()
       );
       filtered.push(submissionRecord as any);
       const updatedAssignment: HomeworkAssignment = {
@@ -575,15 +574,14 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
         const filtered = existingSubs.filter((s: any) => 
           (s.studentId || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
           (s.studentCode || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
-          (s.maHs || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
-          (s.studentName || '').toLowerCase() !== (effectiveUserName || '').toLowerCase()
+          (s.maHs || '').toLowerCase() !== effectiveUserId.toLowerCase()
         );
 
         filtered.push(submissionRecord);
 
         // Calculate unique submitted student IDs and unique count
         const uniqueStudentKeys = new Set(
-          filtered.map((s: any) => (s.studentId || s.studentCode || s.maHs || s.studentName || '').trim().toLowerCase()).filter(Boolean)
+          filtered.map((s: any) => (s.studentCode || s.maHs || s.studentId || '').trim().toLowerCase()).filter(Boolean)
         );
         const count = uniqueStudentKeys.size;
         const submittedIdsList = Array.from(uniqueStudentKeys);

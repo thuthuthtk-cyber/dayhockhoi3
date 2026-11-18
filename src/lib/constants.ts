@@ -1,11 +1,7 @@
 export const SUBJECTS = ["Toán", "Tiếng Việt", "Tin học", "Công nghệ", "Khoa học", "Lịch sử và Địa lý", "Tiếng Anh", "Đạo đức", "Tự nhiên và Xã hội", "Âm nhạc", "Mỹ thuật", "GDTC", "HĐTN"];
-export const GRADES = ["Khối 1", "Khối 2", "Khối 3", "Khối 4", "Khối 5"];
+export const GRADES = ["Khối 3"];
 export const CLASSES_BY_GRADE: Record<string, string[]> = {
-  "Khối 1": ["Lớp 1C", "Lớp 1D"],
-  "Khối 2": ["Lớp 2C", "Lớp 2D"],
-  "Khối 3": ["Lớp 3C", "Lớp 3D"],
-  "Khối 4": ["Lớp 4C", "Lớp 4D"],
-  "Khối 5": ["Lớp 5C", "Lớp 5D"]
+  "Khối 3": ["Lớp 3C", "Lớp 3D"]
 };
 export const ALL_CLASSES = Object.values(CLASSES_BY_GRADE).flat();
 export const EXAM_TYPES = ["Thường xuyên", "Giữa kì 1", "Cuối kì 1", "Giữa kì 2", "Cuối kì 2"];

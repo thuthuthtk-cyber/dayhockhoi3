@@ -194,7 +194,7 @@ export const Lesson5EModule: React.FC<Lesson5EModuleProps> = ({
   // Form State for Editor
   const [topicInput, setTopicInput] = useState('');
   const [subjectInput, setSubjectInput] = useState('Toán Học');
-  const [gradeInput, setGradeInput] = useState('Khối 10');
+  const [gradeInput, setGradeInput] = useState('Khối 3');
   const [durationInput, setDurationInput] = useState('45 phút');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
 
@@ -202,7 +202,7 @@ export const Lesson5EModule: React.FC<Lesson5EModuleProps> = ({
     id: `les-${Date.now()}`,
     title: 'Bài Giảng 5E Mới',
     subject: 'Toán Học',
-    grade: 'Khối 10',
+    grade: 'Khối 3',
     duration: '45 phút',
     topic: '',
     authorName: activeTeacherProfile.name,
@@ -855,9 +855,6 @@ export const Lesson5EModule: React.FC<Lesson5EModuleProps> = ({
                   className="w-full px-3 py-2 text-xs rounded-xl border border-white/20 bg-slate-800 text-white focus:outline-none focus:ring-2 focus:ring-amber-300"
                 >
                   <option value="Khối 3">Khối 3</option>
-                  <option value="Khối 4">Khối 4</option>
-                  <option value="Khối 5">Khối 5</option>
-                  <option value="Khối 10">Khối 10</option>
                 </select>
               </div>
             </div>

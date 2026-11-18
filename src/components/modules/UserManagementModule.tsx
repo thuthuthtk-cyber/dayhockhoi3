@@ -320,72 +320,7 @@ interface UserManagementModuleProps {
   userRole: UserRole;
 }
 
-// Block definition
-interface BlockConfig {
-  id: string;
-  name: string;
-  color: string;
-  icon: string;
-  totalClasses: number;
-  totalStudents: number;
-  male: number;
-  female: number;
-}
-
-const BLOCKS_CONFIG: BlockConfig[] = [
-  {
-    id: '1',
-    name: 'Khối 1',
-    color: 'bg-gradient-to-br from-indigo-500 via-blue-600 to-indigo-700 text-white',
-    icon: '🪐',
-    totalClasses: 2,
-    totalStudents: 0,
-    male: 0,
-    female: 0
-  },
-  {
-    id: '2',
-    name: 'Khối 2',
-    color: 'bg-gradient-to-br from-pink-500 via-rose-500 to-red-600 text-white',
-    icon: '🎨',
-    totalClasses: 2,
-    totalStudents: 0,
-    male: 0,
-    female: 0
-  },
-  {
-    id: '3',
-    name: 'Khối 3',
-    color: 'bg-gradient-to-br from-emerald-500 via-teal-600 to-emerald-700 text-white',
-    icon: '🍀',
-    totalClasses: 2,
-    totalStudents: 39,
-    male: 23,
-    female: 16
-  },
-  {
-    id: '4',
-    name: 'Khối 4',
-    color: 'bg-gradient-to-br from-amber-500 via-orange-500 to-amber-600 text-white',
-    icon: '⚡',
-    totalClasses: 2,
-    totalStudents: 39,
-    male: 20,
-    female: 19
-  },
-  {
-    id: '5',
-    name: 'Khối 5',
-    color: 'bg-gradient-to-br from-purple-500 via-violet-600 to-purple-700 text-white',
-    icon: '🚀',
-    totalClasses: 2,
-    totalStudents: 37,
-    male: 19,
-    female: 18
-  }
-];
-
-// Classes config per block matching Firestore schema
+// Classes config matching Firestore schema
 export interface ClassConfig {
   id: string;
   name: string;
@@ -397,34 +332,17 @@ export interface ClassConfig {
 }
 
 export const INITIAL_CLASSES: ClassConfig[] = [
-  // Khối 1
-  { id: '1A', grade: 'Khối 1', name: 'Lớp 1A', room: 'Phòng 101', homeroomTeacher: 'Nguyễn Thị Hoa', homeroomTeacherId: 'gv-01', subjects: (STANDARD_GRADE_SUBJECTS['Khối 1'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '1B', grade: 'Khối 1', name: 'Lớp 1B', room: 'Phòng 102', homeroomTeacher: 'Phạm Văn Nam', homeroomTeacherId: 'gv-02', subjects: (STANDARD_GRADE_SUBJECTS['Khối 1'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '1C', grade: 'Khối 1', name: 'Lớp 1C', room: 'Phòng 103', homeroomTeacher: 'Hà Thị Trâm', homeroomTeacherId: 'gv-03', subjects: (STANDARD_GRADE_SUBJECTS['Khối 1'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '1D', grade: 'Khối 1', name: 'Lớp 1D', room: 'Phòng 104', homeroomTeacher: 'Lưu Thị Minh', homeroomTeacherId: 'gv-04', subjects: (STANDARD_GRADE_SUBJECTS['Khối 1'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-
-  // Khối 2
-  { id: '2A', grade: 'Khối 2', name: 'Lớp 2A', room: 'Phòng 201', homeroomTeacher: 'Lê Thị Mai', homeroomTeacherId: 'gv-05', subjects: (STANDARD_GRADE_SUBJECTS['Khối 2'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '2B', grade: 'Khối 2', name: 'Lớp 2B', room: 'Phòng 202', homeroomTeacher: 'Đỗ Văn Thành', homeroomTeacherId: 'gv-06', subjects: (STANDARD_GRADE_SUBJECTS['Khối 2'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '2C', grade: 'Khối 2', name: 'Lớp 2C', room: 'Phòng 203', homeroomTeacher: 'Bùi Thị Yến', homeroomTeacherId: 'gv-07', subjects: (STANDARD_GRADE_SUBJECTS['Khối 2'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '2D', grade: 'Khối 2', name: 'Lớp 2D', room: 'Phòng 204', homeroomTeacher: 'Bùi Thị Tuyến', homeroomTeacherId: 'gv-08', subjects: (STANDARD_GRADE_SUBJECTS['Khối 2'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-
   // Khối 3
   { id: '3C', grade: 'Khối 3', name: 'Lớp 3C', room: 'Phòng 303', homeroomTeacher: 'Phạm Thị Thanh Thảo', homeroomTeacherId: 'gv-11', subjects: (STANDARD_GRADE_SUBJECTS['Khối 3'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '3D', grade: 'Khối 3', name: 'Lớp 3D', room: 'Phòng 304', homeroomTeacher: 'Thầy Nguyễn Văn Quân', homeroomTeacherId: 'gv-12', subjects: (STANDARD_GRADE_SUBJECTS['Khối 3'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-
-  // Khối 4
-  { id: '4A', grade: 'Khối 4', name: 'Lớp 4A', room: 'Phòng 401', homeroomTeacher: 'Đặng Thị Hương', homeroomTeacherId: 'gv-13', subjects: (STANDARD_GRADE_SUBJECTS['Khối 4'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '4B', grade: 'Khối 4', name: 'Lớp 4B', room: 'Phòng 402', homeroomTeacher: 'Bùi Văn Tiến', homeroomTeacherId: 'gv-14', subjects: (STANDARD_GRADE_SUBJECTS['Khối 4'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '4C', grade: 'Khối 4', name: 'Lớp 4C', room: 'Phòng 403', homeroomTeacher: 'Trần Hữu Ích', homeroomTeacherId: 'gv-15', subjects: (STANDARD_GRADE_SUBJECTS['Khối 4'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '4D', grade: 'Khối 4', name: 'Lớp 4D', room: 'Phòng 404', homeroomTeacher: 'Đồng Thị Tâm', homeroomTeacherId: 'gv-16', subjects: (STANDARD_GRADE_SUBJECTS['Khối 4'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-
-  // Khối 5
-  { id: '5A', grade: 'Khối 5', name: 'Lớp 5A', room: 'Phòng 501', homeroomTeacher: 'Ngô Thị Linh', homeroomTeacherId: 'gv-17', subjects: (STANDARD_GRADE_SUBJECTS['Khối 5'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '5B', grade: 'Khối 5', name: 'Lớp 5B', room: 'Phòng 502', homeroomTeacher: 'Trần Văn Đức', homeroomTeacherId: 'gv-18', subjects: (STANDARD_GRADE_SUBJECTS['Khối 5'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '5C', grade: 'Khối 5', name: 'Lớp 5C', room: 'Phòng 503', homeroomTeacher: 'Trần Thị Diễm Hương', homeroomTeacherId: 'gv-19', subjects: (STANDARD_GRADE_SUBJECTS['Khối 5'] || []).map(s => ({ isVisible: true, subjectName: s })) },
-  { id: '5D', grade: 'Khối 5', name: 'Lớp 5D', room: 'Phòng 504', homeroomTeacher: 'Nguyễn Thị Tuyết', homeroomTeacherId: 'gv-20', subjects: (STANDARD_GRADE_SUBJECTS['Khối 5'] || []).map(s => ({ isVisible: true, subjectName: s })) }
+  { id: '3D', grade: 'Khối 3', name: 'Lớp 3D', room: 'Phòng 304', homeroomTeacher: 'Thầy Nguyễn Văn Quân', homeroomTeacherId: 'gv-12', subjects: (STANDARD_GRADE_SUBJECTS['Khối 3'] || []).map(s => ({ isVisible: true, subjectName: s })) }
 ];
+
+const isGrade3Class = (c: { grade?: string; name?: string; id?: string }): boolean => {
+  const gradeDigit = (c.grade || '').replace(/[^0-9]/g, '');
+  if (gradeDigit) return gradeDigit === '3';
+  const nameOrIdDigit = (c.name || c.id || '').replace(/[^0-9]/g, '');
+  return nameOrIdDigit === '3';
+};
 
 const getClassesFromLocalStorage = (): ClassConfig[] => {
   const data = localStorage.getItem('eduplay_classes_config');
@@ -435,7 +353,9 @@ const getClassesFromLocalStorage = (): ClassConfig[] => {
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed)) {
         parsed.forEach((c: ClassConfig) => {
-          if (c && c.id) classMap.set(c.id, c);
+          if (c && c.id && isGrade3Class(c)) {
+            classMap.set(c.id, { ...c, grade: 'Khối 3' });
+          }
         });
       }
     } catch {}
@@ -765,9 +685,8 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
     };
   }, []);
 
-  // Student Navigation State
-  const [selectedBlock, setSelectedBlock] = useState<string | null>(null); // '1', '2', '3', '4', '5'
-  const [selectedClass, setSelectedClass] = useState<string | null>(null); // e.g. 'Lớp 3A'
+  // Student Navigation State (hiển thị thẳng danh sách lớp, bỏ bước chọn Khối)
+  const [selectedClass, setSelectedClass] = useState<string | null>(null); // e.g. 'Lớp 3C'
   const [classSubTab, setClassSubTab] = useState<'roster' | 'gradebook'>('roster');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -822,19 +741,21 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
               const rawName = data.name || data.className || rawId || 'Lớp mới';
               const stdName = getStandardClassName(rawName);
               const upperKey = stdName.replace(/^Lớp\s*/i, '').trim().toUpperCase() || rawId.toUpperCase();
+              const gradeDigit = (data.grade || '').replace(/[^0-9]/g, '') || upperKey.replace(/[^0-9]/g, '');
+              if (gradeDigit !== '3') return;
               
               if (!seenKeys.has(upperKey)) {
                 seenKeys.add(upperKey);
                 cloudClasses.push({
                   id: upperKey,
-                  grade: data.grade || 'Khối 1',
+                  grade: 'Khối 3',
                   name: stdName,
                   room: data.room || '',
                   homeroomTeacher: data.homeroomTeacher || '',
                   homeroomTeacherId: data.homeroomTeacherId || '',
                   subjects: Array.isArray(data.subjects) && data.subjects.length > 0
                     ? data.subjects
-                    : (STANDARD_GRADE_SUBJECTS[data.grade || 'Khối 1'] || PRIMARY_SCHOOL_SUBJECTS).map((s) => ({ isVisible: true, subjectName: s }))
+                    : (STANDARD_GRADE_SUBJECTS['Khối 3'] || PRIMARY_SCHOOL_SUBJECTS).map((s) => ({ isVisible: true, subjectName: s }))
                 });
               }
             });
@@ -1099,10 +1020,41 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
       const stdName = getStandardClassName(selectedClass);
       const classKey = normalizeClassKey(selectedClass);
 
-      // Ghi đè { students: [], female: 0, male: 0 } vào document tương ứng trên Firestore
-      const res = await clearAllStudentsInClass(selectedClass);
+      // 1. Clear via studentStorageService helper (sets cleared flag & empty array)
+      const res = clearAllStudentsInClass(selectedClass);
 
-      // Cập nhật ngay state danh sách học sinh của component về rỗng []
+      // 2. Proactively update Firestore class_rosters document with empty students list
+      if (db) {
+        try {
+          const rosterRef = doc(db, 'class_rosters', classKey);
+          await setDoc(rosterRef, {
+            className: stdName,
+            classKey,
+            totalStudents: 0,
+            male: 0,
+            female: 0,
+            students: [],
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+
+          if (classKey !== classKey.toLowerCase()) {
+            const lowerRef = doc(db, 'class_rosters', classKey.toLowerCase());
+            await setDoc(lowerRef, {
+              className: stdName,
+              classKey: classKey.toLowerCase(),
+              totalStudents: 0,
+              male: 0,
+              female: 0,
+              students: [],
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
+          }
+        } catch (fbErr) {
+          console.warn('Firestore clear roster doc warning:', fbErr);
+        }
+      }
+
+      // 3. Update component state immediately to 0 students
       setStudentDatabase((prev) => {
         const nextDb = { ...prev };
         nextDb[stdName] = [];
@@ -1112,17 +1064,15 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
       });
 
       if (res.success) {
-        showToast('Đã xóa toàn bộ học sinh thành công!', 'success');
+        showToast(`Đã xóa sạch toàn bộ học sinh lớp ${selectedClass} thành công! Sĩ số hiện tại: 0 học sinh.`, 'success');
       } else {
-        const errDetail = res.error || 'Dữ liệu đã được xóa trong bộ nhớ tạm.';
-        showToast(`Đã xóa học sinh trong bộ nhớ tạm (Firestore: ${errDetail})`, 'success');
+        showToast(`Đã xóa sạch học sinh lớp ${selectedClass} trong bộ nhớ tạm.`, 'success');
       }
     } catch (err: any) {
       console.error('Lỗi khi xóa toàn bộ học sinh:', err);
       const errMsg = err?.message || String(err);
       showToast(`Lỗi khi xóa học sinh: ${errMsg}`, 'error');
     } finally {
-      // BẮT BUỘC tắt trạng thái loading và đóng hộp thoại xác nhận
       setIsClearingAllStudents(false);
       setIsConfirmClearAllStudentsOpen(false);
     }
@@ -1995,10 +1945,9 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
     return canManageStudentsInClass(selectedClass);
   }, [canManageStudentsInClass, selectedClass]);
 
-  // Current block details
-  const activeBlockConfig = BLOCKS_CONFIG.find((b) => b.id === selectedBlock);
-  const activeBlockClasses = hasYearEnrollments ? classesList.filter((c) => c.grade === activeBlockConfig?.name) : [];
-  const activeBlockDynamicStats = activeBlockConfig ? getBlockStats(activeBlockConfig.name) : { total: 0, male: 0, female: 0 };
+  // Direct class list without intermediate block card
+  const activeBlockClasses = hasYearEnrollments ? classesList.filter(isGrade3Class) : [];
+  const activeBlockDynamicStats = getBlockStats('Khối 3');
 
   // Compute total dynamic stats for selected class
   const currentClassStudents = useMemo(() => {
@@ -2101,7 +2050,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
             }`}
           >
             <span className="text-base sm:text-lg">🏫</span>
-            <span>QUẢN LÝ HỌC SINH (5 Khối lớp)</span>
+            <span>QUẢN LÝ HỌC SINH</span>
           </button>
 
           <button
@@ -2139,7 +2088,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
       </div>
 
       {/* ======================================================== */}
-      {/* TAB 1: QUẢN LÝ HỌC SINH (5 KHỐI LỚP)                     */}
+      {/* TAB 1: QUẢN LÝ HỌC SINH (KHỐI 3)                         */}
       {/* ======================================================== */}
       {mainTab === 'students' && (
         <div className="space-y-6">
@@ -2149,9 +2098,9 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
             onGoToPromotion={() => setMainTab('promotion')}
           />
 
-          {/* STATE 1: VIEW ALL 5 GRADE BLOCK CARDS */}
-          {!selectedBlock && (
-            <div className="space-y-6">
+          {/* VIEW CLASSES DIRECTLY (NO KHỐI 3 SELECTION CARD) */}
+          {!selectedClass && (
+            <div className="space-y-6 animate-fade-in">
               {/* Header Banner */}
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
                 <div>
@@ -2160,11 +2109,11 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                       MỚI CẬP NHẬT
                     </span>
                     <h2 className="text-lg font-black text-slate-900 font-heading inline-flex items-center gap-2">
-                      🏫 Hệ Thống Quản Lý Lớp Học & Khối Học
+                      🏫 Hệ Thống Quản Lý Lớp Học
                     </h2>
                   </div>
                   <p className="text-xs text-slate-500 mt-1 font-medium">
-                    Thầy cô bấm chọn một Khối học dưới đây để xem danh sách các lớp học chi tiết.
+                    Tổng số: <b className="text-emerald-700">{activeBlockClasses.length} Lớp học</b> • <b className="text-emerald-700">{activeBlockDynamicStats.total} Học sinh</b> (Nam: {activeBlockDynamicStats.male} | Nữ: {activeBlockDynamicStats.female})
                   </p>
                 </div>
 
@@ -2183,7 +2132,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                         try {
                           const classMap = new Map<string, ClassConfig>();
                           INITIAL_CLASSES.forEach(c => classMap.set(c.id, c));
-                          classesList.forEach(c => classMap.set(c.id, c));
+                          classesList.filter(isGrade3Class).forEach(c => classMap.set(c.id, c));
                           const restored = Array.from(classMap.values());
                           restored.sort((a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true }));
 
@@ -2228,9 +2177,9 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                         const newId = `C-${Date.now()}`;
                         const newClass: ClassConfig = {
                           id: newId,
-                          grade: 'Khối 1',
-                          name: 'Lớp 1C',
-                          room: 'Phòng 103',
+                          grade: 'Khối 3',
+                          name: `Lớp 3${String.fromCharCode(67 + activeBlockClasses.length)}`,
+                          room: `Phòng 30${activeBlockClasses.length + 3}`,
                           subjects: PRIMARY_SCHOOL_SUBJECTS.map(s => ({ isVisible: true, subjectName: s }))
                         };
                         setEditingClass(newClass);
@@ -2245,127 +2194,6 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                     </button>
                   </div>
                 )}
-              </div>
-
-              {/* 5 GRADE CARDS (Khối 1 đến Khối 5) */}
-              {!hasYearEnrollments ? (
-                <AcademicYearEmptyState
-                  academicYear={selectedAcademicYear}
-                  onGoToPromotion={() => setMainTab('promotion')}
-                />
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                  {BLOCKS_CONFIG.map((block) => {
-                    const bStats = getBlockStats(block.name);
-                    const blockClassesCount = classesList.filter(
-                      (c) => c.grade === block.name || (c.grade || '').replace(/[^0-9]/g, '') === block.id
-                    ).length;
-                    const displayClassesCount = blockClassesCount > 0 ? blockClassesCount : block.totalClasses;
-
-                    return (
-                      <div
-                        key={block.id}
-                        onClick={() => {
-                          setSelectedBlock(block.id);
-                          setSelectedClass(null);
-                        }}
-                        className={`${block.color} rounded-3xl p-5 shadow-lg border border-white/20 transition-all transform hover:-translate-y-1.5 hover:shadow-2xl cursor-pointer relative overflow-hidden group`}
-                      >
-                        {/* Top row */}
-                        <div className="flex items-center justify-between mb-6">
-                          <span className="text-3xl filter drop-shadow-md group-hover:scale-110 transition-transform">
-                            {block.icon}
-                          </span>
-                          <span className="px-2.5 py-1 rounded-full bg-white/20 backdrop-blur-md text-[11px] font-black uppercase text-white tracking-wider border border-white/30">
-                            {displayClassesCount} LỚP
-                          </span>
-                        </div>
-
-                        {/* Block Title */}
-                        <h3 className="text-2xl font-black tracking-tight mb-4 font-heading drop-shadow-xs">
-                          {block.name}
-                        </h3>
-
-                        {/* Stats card inside */}
-                        <div className="bg-black/20 backdrop-blur-xs rounded-2xl p-3 space-y-1 border border-white/10">
-                          <div className="text-xs font-extrabold text-white">
-                            Sĩ số:{' '}
-                            {isStudentsLoading && bStats.total === 0 ? (
-                              <span className="text-amber-200 font-bold text-xs animate-pulse">Đang tải...</span>
-                            ) : (
-                              <span className="text-amber-300 font-black text-sm">{bStats.total} học sinh</span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-white/90 font-medium flex items-center justify-between pt-1 border-t border-white/10">
-                            <span>
-                              Nam: <b>{isStudentsLoading && bStats.total === 0 ? '-' : bStats.male}</b>
-                            </span>
-                            <span>|</span>
-                            <span>
-                              Nữ: <b>{isStudentsLoading && bStats.total === 0 ? '-' : bStats.female}</b>
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* STATE 2: VIEW CLASSES IN SELECTED BLOCK */}
-          {selectedBlock && !selectedClass && (
-            <div className="space-y-5 animate-fade-in">
-              {/* Top Navigation & Back Button */}
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setSelectedBlock(null)}
-                    className="px-3.5 py-2 rounded-xl text-xs font-extrabold bg-slate-100 hover:bg-slate-200 text-slate-800 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-                  >
-                    <ArrowLeft className="w-4 h-4 text-slate-700" /> Quay lại chọn Khối
-                  </button>
-                  <div className="h-5 w-px bg-slate-200 hidden sm:block" />
-                  <div className="text-xs font-bold text-slate-500">
-                    Khối học selected: <span className="text-emerald-700 font-extrabold">{activeBlockConfig?.name}</span>
-                  </div>
-                </div>
-
-                {isSystemAdmin && (
-                  <button
-                    onClick={() => {
-                      const gradeName = activeBlockConfig?.name || 'Khối 1';
-                      const newId = `C-${Date.now()}`;
-                      const newClass: ClassConfig = {
-                        id: newId,
-                        grade: gradeName,
-                        name: `Lớp ${selectedBlock || '1'}X`,
-                        room: `Phòng ${selectedBlock || '1'}0${classesList.filter(c => c.grade === gradeName).length + 1}`,
-                        subjects: PRIMARY_SCHOOL_SUBJECTS.map(s => ({ isVisible: true, subjectName: s }))
-                      };
-                      setEditingClass(newClass);
-                    }}
-                    className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Thêm lớp mới vào {activeBlockConfig?.name}
-                  </button>
-                )}
-              </div>
-
-              {/* Block Overview Card */}
-              <div className={`${activeBlockConfig?.color} p-6 rounded-3xl shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4`}>
-                <div className="space-y-1">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/20 backdrop-blur-md text-white text-xs font-black uppercase tracking-wider">
-                    <span>{activeBlockConfig?.icon}</span> {activeBlockConfig?.name} TIỂU HỌC
-                  </div>
-                  <h2 className="text-2xl font-black text-white font-heading">
-                    Danh Sách Lớp Học - {activeBlockConfig?.name}
-                  </h2>
-                  <p className="text-xs text-white/90 font-medium">
-                    Tổng số: {activeBlockClasses.length} Lớp học • {activeBlockDynamicStats.total} Học sinh (Nam: {activeBlockDynamicStats.male} | Nữ: {activeBlockDynamicStats.female})
-                  </p>
-                </div>
               </div>
 
               {/* Class Cards Grid */}
@@ -2463,7 +2291,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
           )}
 
           {/* STATE 3: VIEW DETAILED CLASS ROSTER & GRADEBOOK */}
-          {selectedBlock && selectedClass && (
+          {selectedClass && (
             <div className="space-y-5 animate-fade-in">
               {/* Back Buttons & Breadcrumb */}
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
@@ -2472,16 +2300,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                     onClick={() => setSelectedClass(null)}
                     className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 transition-all flex items-center gap-1 cursor-pointer active:scale-95"
                   >
-                    <ArrowLeft className="w-3.5 h-3.5" /> Lớp học {activeBlockConfig?.name}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSelectedClass(null);
-                      setSelectedBlock(null);
-                    }}
-                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 transition-all cursor-pointer"
-                  >
-                    Chọn Khối khác
+                    <ArrowLeft className="w-3.5 h-3.5" /> Danh sách lớp học
                   </button>
                   <span className="text-slate-300">•</span>
                   <span className="text-xs font-extrabold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
@@ -4512,7 +4331,7 @@ const EditClassModal: React.FC<EditClassModalProps> = ({
 
   // Tab 1 State
   const [classNameInput, setClassNameInput] = useState<string>(editingClass.name || '');
-  const [gradeInput, setGradeInput] = useState<string>(editingClass.grade || 'Khối 1');
+  const [gradeInput, setGradeInput] = useState<string>(editingClass.grade || 'Khối 3');
   const [teacherSearch, setTeacherSearch] = useState<string>('');
   const [isTeacherDropdownOpen, setIsTeacherDropdownOpen] = useState<boolean>(false);
 
@@ -4718,11 +4537,7 @@ const EditClassModal: React.FC<EditClassModalProps> = ({
                   onChange={(e) => setGradeInput(e.target.value)}
                   className="w-full p-3 text-xs font-semibold rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 >
-                  <option value="Khối 1">Khối 1</option>
-                  <option value="Khối 2">Khối 2</option>
                   <option value="Khối 3">Khối 3</option>
-                  <option value="Khối 4">Khối 4</option>
-                  <option value="Khối 5">Khối 5</option>
                 </select>
               </div>
 
@@ -5709,7 +5524,7 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
       : getClassesFromLocalStorage();
     
     const map = new Map<string, ClassConfig>();
-    rawList.forEach((c) => {
+    rawList.filter(isGrade3Class).forEach((c) => {
       const rawName = c.name || c.id || '';
       const stdName = getStandardClassName(rawName);
       const cleanKey = stdName.replace(/^Lớp\s*/i, '').trim().toUpperCase();
@@ -5717,6 +5532,7 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
         map.set(cleanKey, {
           ...c,
           id: cleanKey,
+          grade: 'Khối 3',
           name: stdName
         });
       }
@@ -5731,7 +5547,7 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
   useEffect(() => {
     if (propClassesList && propClassesList.length > 0) {
       const map = new Map<string, ClassConfig>();
-      propClassesList.forEach((c) => {
+      propClassesList.filter(isGrade3Class).forEach((c) => {
         const rawName = c.name || c.id || '';
         const stdName = getStandardClassName(rawName);
         const cleanKey = stdName.replace(/^Lớp\s*/i, '').trim().toUpperCase();
@@ -5739,6 +5555,7 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
           map.set(cleanKey, {
             ...c,
             id: cleanKey,
+            grade: 'Khối 3',
             name: stdName
           });
         }
@@ -5763,18 +5580,20 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
             const rawName = data.name || rawId || 'Lớp mới';
             const stdName = getStandardClassName(rawName);
             const cleanKey = stdName.replace(/^Lớp\s*/i, '').trim().toUpperCase() || rawId.toUpperCase();
+            const gDigit = (data.grade || '').replace(/[^0-9]/g, '') || cleanKey.replace(/[^0-9]/g, '');
+            if (gDigit !== '3') return;
 
             if (!map.has(cleanKey)) {
               map.set(cleanKey, {
                 id: cleanKey,
-                grade: data.grade || `Khối ${cleanKey.replace(/[^0-9]/g, '') || '1'}`,
+                grade: 'Khối 3',
                 name: stdName,
                 room: data.room || '',
                 homeroomTeacher: data.homeroomTeacher || '',
                 homeroomTeacherId: data.homeroomTeacherId || '',
                 subjects: Array.isArray(data.subjects) && data.subjects.length > 0
                   ? data.subjects
-                  : (STANDARD_GRADE_SUBJECTS[data.grade || 'Khối 1'] || PRIMARY_SCHOOL_SUBJECTS).map((s) => ({ isVisible: true, subjectName: s }))
+                  : (STANDARD_GRADE_SUBJECTS['Khối 3'] || PRIMARY_SCHOOL_SUBJECTS).map((s) => ({ isVisible: true, subjectName: s }))
               });
             }
           });
@@ -5896,11 +5715,11 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
     return 'Chưa xác định';
   };
 
-  // Danh mục tất cả lớp đích có thể chuyển tới (không trùng lặp)
+  // Danh mục tất cả lớp đích có thể chuyển tới (chỉ Khối 3)
   const availableTargetOptions = useMemo(() => {
     const set = new Set<string>();
     officialClasses.forEach(c => set.add(c.name));
-    ['Lớp 1C', 'Lớp 1D', 'Lớp 2C', 'Lớp 2D', 'Lớp 3C', 'Lớp 3D', 'Lớp 4C', 'Lớp 4D', 'Lớp 5C', 'Lớp 5D'].forEach(c => set.add(c));
+    ['Lớp 3C', 'Lớp 3D'].forEach(c => set.add(c));
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
   }, [officialClasses]);
 
@@ -6180,7 +5999,7 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
                           }}
                           className="w-full sm:w-80 p-2.5 rounded-xl border border-slate-200 bg-white font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                         >
-                          <option value="GRADUATE">🎓 Tốt nghiệp / Ra trường (Khối 5)</option>
+                          <option value="GRADUATE">🎓 Tốt nghiệp / Ra trường</option>
                           <option value="Chưa xác định">⏳ Chưa xác định / Giữ nguyên</option>
                           {availableTargetOptions.map(opt => (
                             <option key={opt} value={opt}>Chuyển lên {opt}</option>

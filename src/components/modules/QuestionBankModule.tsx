@@ -437,7 +437,7 @@ export const QuestionBankModule: React.FC<QuestionBankModuleProps> = ({
 
   // Quick Create Modal States
   const [activeQuickTab, setActiveQuickTab] = useState<1 | 2 | 3>(1);
-  const [quickGrade, setQuickGrade] = useState('Khối 4');
+  const [quickGrade, setQuickGrade] = useState('Khối 3');
   const [quickSubject, setQuickSubject] = useState('Toán');
   const [quickExamType, setQuickExamType] = useState('Thường xuyên');
   const [quickLevelSelection, setQuickLevelSelection] = useState('all3');
