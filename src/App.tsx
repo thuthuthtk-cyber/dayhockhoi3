@@ -26,15 +26,16 @@ import { getStudentsFromLocalStorage } from './services/studentStorageService';
 import {
   ACTIVE_MODULE_KEY,
   DEFAULT_SSO_FALLBACK_EMAIL,
-  isEmbeddedInIframe,
+  resolveInitialSsoBootstrap,
   parseSsoParamsFromUrl,
   extractSsoPayloadFromMessage,
   authenticateSsoPayload,
   getStoredSsoSession,
+  requestSsoFromParentWindow,
   stripSensitiveSsoParamsFromUrl,
   sanitizeTeacherModule,
   clearAllAuthSessions
-} from './services/ssoService';
+} from './services/ssoAutoLoginService';
 import {
   saveQuestionToFirestore,
   saveQuestionsBatchToFirestore,
@@ -84,13 +85,14 @@ function checkHasSavedSession(): boolean {
 }
 
 export function App() {
-  const initialSsoHint = React.useMemo(() => parseSsoParamsFromUrl(), []);
-  const initialInIframe = React.useMemo(() => isEmbeddedInIframe(), []);
-  const initialStoredSso = React.useMemo(() => getStoredSsoSession(), []);
+  const ssoBootstrap = React.useMemo(() => resolveInitialSsoBootstrap(), []);
+  const initialSsoHint = ssoBootstrap.urlPayload;
+  const initialInIframe = ssoBootstrap.inIframe;
+  const initialStoredSso = ssoBootstrap.storedSession;
 
-  // Bypass login immediately if URL has SSO params, embedded inside iframe, or saved SSO/active session exists in localStorage
+  // Bypass login immediately if URL has SSO params, embedded inside iframe, or saved SSO/active session exists
   const [showPortal, setShowPortal] = useState<boolean>(() => {
-    if (initialSsoHint || initialInIframe || initialStoredSso) return false;
+    if (ssoBootstrap.shouldBypassLogin) return false;
     return !checkHasSavedSession();
   });
   const [isSsoAuthenticating, setIsSsoAuthenticating] = useState<boolean>(false);
@@ -461,11 +463,14 @@ export function App() {
       );
     }
 
+    let receivedParentSso = false;
+
     // 2. Listen for iframe postMessage credentials (PK_TRUC_KHANG_SSO_LOGIN & standard SSO types)
     const handlePostMessage = (event: MessageEvent) => {
       try {
         const ssoPayload = extractSsoPayloadFromMessage(event.data, event.origin);
         if (!ssoPayload) return;
+        receivedParentSso = true;
         const sourceWin = (event.source as Window | null) || (initialInIframe ? window.parent : null);
         applySsoPayload(ssoPayload, {
           replyTarget: sourceWin ? { win: sourceWin, origin: event.origin } : undefined,
@@ -478,16 +483,20 @@ export function App() {
 
     window.addEventListener('message', handlePostMessage);
 
-    // 3. Notify Parent App that Khối 3 iframe is mounted and ready to receive PK_TRUC_KHANG_SSO_LOGIN
-    try {
-      if (initialInIframe && window.parent) {
-        window.parent.postMessage({ type: 'PK_TRUC_KHANG_SSO_READY', app: 'khoi3' }, '*');
-        window.parent.postMessage({ type: 'EDUPLAY_SSO_READY', app: 'khoi3' }, '*');
-      }
-    } catch {}
+    // 3. Proactively request SSO session ('PK_TRUC_KHANG_REQUEST_SSO') from parent portal when running in iframe
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    if (initialInIframe) {
+      requestSsoFromParentWindow();
+      retryTimer = setTimeout(() => {
+        if (isMounted && !receivedParentSso) {
+          requestSsoFromParentWindow();
+        }
+      }, 350);
+    }
 
     return () => {
       isMounted = false;
+      if (retryTimer) clearTimeout(retryTimer);
       window.removeEventListener('message', handlePostMessage);
     };
   }, [initialSsoHint, initialInIframe, initialStoredSso]);
@@ -769,6 +778,7 @@ export function App() {
     setActiveModule(mod);
     try {
       localStorage.setItem(ACTIVE_MODULE_KEY, mod);
+      sessionStorage.setItem(ACTIVE_MODULE_KEY, mod);
     } catch {}
   };
 

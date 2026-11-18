@@ -13,6 +13,9 @@ export const SSO_USER_KEY = 'eduplay_sso_current_user';
 export const SSO_TOKEN_KEY = 'eduplay_sso_token';
 export const ACTIVE_MODULE_KEY = 'eduplay_active_module';
 
+export const PK_TRUC_KHANG_REQUEST_SSO = 'PK_TRUC_KHANG_REQUEST_SSO';
+export const PK_TRUC_KHANG_SSO_LOGIN = 'PK_TRUC_KHANG_SSO_LOGIN';
+
 export interface SsoPayload {
   email?: string;
   token?: string;
@@ -82,15 +85,37 @@ const SSO_URL_PARAM_KEYS = [
 ];
 
 /**
- * Safely detect whether app is running inside a parent iframe (e.g. "Dạy và Học Số PK Trực Khang").
+ * Detect whether the app is running inside a parent iframe (e.g. "Dạy và Học Số PK Trực Khang").
  */
 export function isEmbeddedInIframe(): boolean {
   try {
     if (typeof window === 'undefined') return false;
     return window.self !== window.top;
   } catch {
-    // Accessing window.top cross-origin throws SecurityError when embedded in an iframe
+    // Accessing window.top across origins throws SecurityError inside an iframe
     return true;
+  }
+}
+
+/**
+ * Request parent portal ("Dạy và Học Số PK Trực Khang") for active SSO teacher session via postMessage.
+ */
+export function requestSsoFromParentWindow(): void {
+  try {
+    if (typeof window === 'undefined' || !isEmbeddedInIframe() || !window.parent) return;
+    window.parent.postMessage(
+      {
+        type: PK_TRUC_KHANG_REQUEST_SSO,
+        app: 'khoi3',
+        source: 'quanlybaitap-khoi3',
+        timestamp: Date.now()
+      },
+      '*'
+    );
+    window.parent.postMessage({ type: 'PK_TRUC_KHANG_SSO_READY', app: 'khoi3' }, '*');
+    window.parent.postMessage({ type: 'EDUPLAY_SSO_READY', app: 'khoi3' }, '*');
+  } catch (err) {
+    console.warn('Không thể gửi tín hiệu PK_TRUC_KHANG_REQUEST_SSO lên parent window:', err);
   }
 }
 
@@ -133,46 +158,117 @@ function isTruthyFlag(val?: string | boolean | number | null): boolean {
   return clean === 'true' || clean === '1' || clean === 'yes';
 }
 
-function isValidEmailFormat(email?: string | null): email is string {
+function isValidEmailFormat(email?: string | null): boolean {
   if (!email || typeof email !== 'string') return false;
   const trimmed = email.trim().toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
 }
 
 /**
- * Safely decode JWT payload without throwing on non-JWT opaque tokens.
+ * Safely decode standard or URL-safe Base64 string supporting UTF-8 Vietnamese text.
  */
-export function decodeJwtPayloadSafe(token?: string | null): Record<string, any> | null {
+export function decodeBase64Utf8Safe(base64Input?: string | null): string | null {
   try {
-    if (!token || typeof token !== 'string') return null;
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
+    if (!base64Input || typeof base64Input !== 'string') return null;
+    const clean = base64Input.trim().replace(/\s+/g, '');
+    if (!clean) return null;
 
-    const base64Url = parts[1];
-    if (!base64Url) return null;
+    const standardB64 = clean.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = standardB64 + '='.repeat((4 - (standardB64.length % 4)) % 4);
+    const binary = atob(padded);
 
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
-    const jsonPayload = decodeURIComponent(
-      atob(padded)
+    if (typeof TextDecoder !== 'undefined') {
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    }
+
+    return decodeURIComponent(
+      binary
         .split('')
         .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
         .join('')
     );
-    const parsed = JSON.parse(jsonPayload);
-    return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
   }
 }
 
 /**
- * Validate optional token (if JWT, verify expiry & email consistency).
+ * Safely decode an SSO token that may be:
+ *  1) A 3-part JWT (header.payload.signature)
+ *  2) A Base64-encoded JSON payload (e.g. { email, sso_email, name, sso_name, role, sso_role })
+ *  3) A plain JSON string or Base64-encoded email string
  */
-function validateSsoTokenConsistency(
+export function decodeSsoTokenPayloadSafe(token?: string | null): Record<string, any> | null {
+  try {
+    if (!token || typeof token !== 'string') return null;
+    const clean = token.trim();
+    if (!clean) return null;
+
+    // 1. Check 3-part JWT
+    const parts = clean.split('.');
+    if (parts.length === 3 && parts[1]) {
+      const decodedJwt = decodeBase64Utf8Safe(parts[1]);
+      if (decodedJwt) {
+        const parsedJwt = JSON.parse(decodedJwt);
+        if (parsedJwt && typeof parsedJwt === 'object') return parsedJwt;
+      }
+    }
+
+    // 2. Check direct JSON string
+    if (clean.startsWith('{') && clean.endsWith('}')) {
+      const parsedDirect = JSON.parse(clean);
+      if (parsedDirect && typeof parsedDirect === 'object') return parsedDirect;
+    }
+
+    // 3. Check Base64-encoded JSON or Base64-encoded email/delimited payload
+    const decodedB64 = decodeBase64Utf8Safe(clean);
+    if (decodedB64) {
+      const trimmedDecoded = decodedB64.trim();
+      if (trimmedDecoded.startsWith('{') && trimmedDecoded.endsWith('}')) {
+        try {
+          const parsedObj = JSON.parse(trimmedDecoded);
+          if (parsedObj && typeof parsedObj === 'object') return parsedObj;
+        } catch {}
+      }
+      if (isValidEmailFormat(trimmedDecoded)) {
+        return { email: trimmedDecoded.toLowerCase() };
+      }
+      if (trimmedDecoded.includes('|')) {
+        const [maybeEmail, maybeName, maybeRole] = trimmedDecoded.split('|').map((s) => s.trim());
+        if (isValidEmailFormat(maybeEmail)) {
+          return {
+            email: maybeEmail.toLowerCase(),
+            name: maybeName || undefined,
+            role: maybeRole || undefined
+          };
+        }
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate optional sso_token (JWT or Base64 JSON) and extract embedded identity claims safely.
+ */
+function validateAndDecodeSsoToken(
   token: string | undefined,
   providedEmail: string | undefined
-): { valid: boolean; derivedEmail?: string; reason?: string } {
+): {
+  valid: boolean;
+  derivedEmail?: string;
+  derivedName?: string;
+  derivedRole?: string;
+  derivedModule?: string;
+  reason?: string;
+} {
   try {
     if (!token) {
       return { valid: true, derivedEmail: providedEmail };
@@ -182,18 +278,27 @@ function validateSsoTokenConsistency(
       return { valid: true, derivedEmail: providedEmail };
     }
 
-    const jwtPayload = decodeJwtPayloadSafe(cleanToken);
-    if (jwtPayload) {
-      // Check JWT expiration if present (with 5 min clock skew tolerance for embedded SSO)
-      if (typeof jwtPayload.exp === 'number' && jwtPayload.exp * 1000 < Date.now() - 300_000) {
+    const decoded = decodeSsoTokenPayloadSafe(cleanToken);
+    if (decoded) {
+      // Check expiration if present (with 5-min clock skew tolerance)
+      if (typeof decoded.exp === 'number' && decoded.exp * 1000 < Date.now() - 300_000) {
+        return {
+          valid: false,
+          reason: 'Phiên đăng nhập từ cổng chính đã hết hạn. Vui lòng đăng nhập lại.'
+        };
+      }
+      if (typeof decoded.expiresAt === 'number' && decoded.expiresAt < Date.now() - 300_000) {
         return {
           valid: false,
           reason: 'Phiên đăng nhập từ cổng chính đã hết hạn. Vui lòng đăng nhập lại.'
         };
       }
 
+      const rawTokenEmail = decoded.sso_email || decoded.email || decoded.userEmail;
       const tokenEmail =
-        typeof jwtPayload.email === 'string' ? jwtPayload.email.trim().toLowerCase() : undefined;
+        typeof rawTokenEmail === 'string' && isValidEmailFormat(rawTokenEmail)
+          ? rawTokenEmail.trim().toLowerCase()
+          : undefined;
 
       if (tokenEmail && providedEmail && tokenEmail !== providedEmail.trim().toLowerCase()) {
         return {
@@ -202,13 +307,20 @@ function validateSsoTokenConsistency(
         };
       }
 
+      const rawTokenName = decoded.sso_name || decoded.name || decoded.displayName;
+      const rawTokenRole = decoded.sso_role || decoded.role;
+      const rawTokenModule = decoded.module || decoded.target;
+
       return {
         valid: true,
-        derivedEmail: providedEmail || tokenEmail
+        derivedEmail: providedEmail || tokenEmail,
+        derivedName: typeof rawTokenName === 'string' ? rawTokenName.trim() : undefined,
+        derivedRole: typeof rawTokenRole === 'string' ? rawTokenRole.trim() : undefined,
+        derivedModule: typeof rawTokenModule === 'string' ? rawTokenModule.trim() : undefined
       };
     }
 
-    // Opaque session token (non-JWT)
+    // Opaque session token string
     return { valid: true, derivedEmail: providedEmail };
   } catch {
     return { valid: false, reason: 'Không thể kiểm tra token SSO.' };
@@ -216,8 +328,8 @@ function validateSsoTokenConsistency(
 }
 
 /**
- * Parse SSO parameters from both window.location.search and window.location.hash safely.
- * Recognizes ?sso_email=, ?sso_token=, ?auto_login=true as well as ?email=, ?token=, ?autologin=true, ?sso=true.
+ * Parse SSO parameters from window.location.search and window.location.hash safely.
+ * Supports sso_token (JWT or Base64 JSON), sso_email, sso_name, sso_role, auto_login.
  */
 export function parseSsoParamsFromUrl(): SsoPayload | null {
   try {
@@ -230,7 +342,7 @@ export function parseSsoParamsFromUrl(): SsoPayload | null {
       merged.set(key, value);
     });
 
-    // Also support query params placed inside URL hash (e.g. #/?sso_email=...&auto_login=true)
+    // Also support query params placed inside URL hash (e.g. #/?sso_email=...&sso_token=...)
     const rawHash = window.location.hash || '';
     const hashQueryIndex = rawHash.indexOf('?');
     if (hashQueryIndex !== -1) {
@@ -276,20 +388,36 @@ export function parseSsoParamsFromUrl(): SsoPayload | null {
     const hasExplicitSsoParams =
       merged.has('sso_email') ||
       merged.has('sso_token') ||
-      isTruthyFlag(merged.get('auto_login')) ||
+      merged.has('sso_name') ||
+      merged.has('sso_role') ||
       autoFlag ||
       Boolean(email && (token || customToken));
 
     if (!hasExplicitSsoParams) return null;
 
+    // Decode token claims synchronously if available so email/name/role are ready before first render
+    const decodedFromToken = token ? decodeSsoTokenPayloadSafe(token) : null;
+    const tokenEmail =
+      typeof (decodedFromToken?.sso_email || decodedFromToken?.email) === 'string'
+        ? String(decodedFromToken?.sso_email || decodedFromToken?.email).trim().toLowerCase()
+        : undefined;
+    const tokenName =
+      typeof (decodedFromToken?.sso_name || decodedFromToken?.name || decodedFromToken?.displayName) === 'string'
+        ? String(decodedFromToken?.sso_name || decodedFromToken?.name || decodedFromToken?.displayName).trim()
+        : undefined;
+    const tokenRole =
+      typeof (decodedFromToken?.sso_role || decodedFromToken?.role) === 'string'
+        ? String(decodedFromToken?.sso_role || decodedFromToken?.role).trim()
+        : undefined;
+
     return {
-      email,
+      email: email || tokenEmail,
       token,
       customToken,
       autologin: true,
       module: (merged.get('module') || merged.get('tab') || merged.get('target') || '').trim() || undefined,
-      role: (merged.get('sso_role') || merged.get('role') || '').trim() || undefined,
-      name: (merged.get('sso_name') || merged.get('name') || merged.get('displayName') || '').trim() || undefined,
+      role: (merged.get('sso_role') || merged.get('role') || tokenRole || '').trim() || undefined,
+      name: (merged.get('sso_name') || merged.get('name') || merged.get('displayName') || tokenName || '').trim() || undefined,
       className: (merged.get('class') || merged.get('className') || '').trim() || undefined,
       sourceOrigin: (merged.get('parentOrigin') || merged.get('source') || '').trim() || undefined
     };
@@ -301,7 +429,7 @@ export function parseSsoParamsFromUrl(): SsoPayload | null {
 
 /**
  * Extract SSO payload from incoming iframe window.postMessage event data.
- * Prioritizes type === 'PK_TRUC_KHANG_SSO_LOGIN' as well as standard SSO message types.
+ * Recognizes type === 'PK_TRUC_KHANG_SSO_LOGIN' and other standard SSO message shapes.
  */
 export function extractSsoPayloadFromMessage(data: any, origin?: string): SsoPayload | null {
   try {
@@ -309,32 +437,19 @@ export function extractSsoPayloadFromMessage(data: any, origin?: string): SsoPay
 
     const msgType = typeof data.type === 'string' ? data.type.trim().toUpperCase() : '';
     const isKnownMessageType =
-      msgType === 'PK_TRUC_KHANG_SSO_LOGIN' ||
+      msgType === PK_TRUC_KHANG_SSO_LOGIN ||
       msgType === 'EDUPLAY_SSO_LOGIN' ||
       msgType === 'SSO_LOGIN' ||
       msgType === 'AUTH_SSO' ||
       msgType === 'PARENT_AUTH_SYNC' ||
       msgType === 'EDUPLAY_AUTH_PAYLOAD';
 
-    // Support flat data, data.payload, data.user, data.currentUser, or data.teacher
     const nestedSource =
       (data.payload && typeof data.payload === 'object' && data.payload) ||
       (data.user && typeof data.user === 'object' && data.user) ||
       (data.currentUser && typeof data.currentUser === 'object' && data.currentUser) ||
       (data.teacher && typeof data.teacher === 'object' && data.teacher) ||
       data;
-
-    const email = (
-      nestedSource.sso_email ||
-      nestedSource.email ||
-      nestedSource.userEmail ||
-      data.sso_email ||
-      data.email ||
-      ''
-    )
-      .toString()
-      .trim()
-      .toLowerCase() || undefined;
 
     const token = (
       nestedSource.sso_token ||
@@ -348,6 +463,22 @@ export function extractSsoPayloadFromMessage(data: any, origin?: string): SsoPay
     )
       .toString()
       .trim() || undefined;
+
+    const decodedToken = token ? decodeSsoTokenPayloadSafe(token) : null;
+
+    const email = (
+      nestedSource.sso_email ||
+      nestedSource.email ||
+      nestedSource.userEmail ||
+      data.sso_email ||
+      data.email ||
+      decodedToken?.sso_email ||
+      decodedToken?.email ||
+      ''
+    )
+      .toString()
+      .trim()
+      .toLowerCase() || undefined;
 
     const customToken = (
       nestedSource.customToken ||
@@ -372,7 +503,7 @@ export function extractSsoPayloadFromMessage(data: any, origin?: string): SsoPay
       return null;
     }
 
-    if (!email && !token && !customToken && msgType !== 'PK_TRUC_KHANG_SSO_LOGIN') {
+    if (!email && !token && !customToken && msgType !== PK_TRUC_KHANG_SSO_LOGIN) {
       return null;
     }
 
@@ -382,9 +513,18 @@ export function extractSsoPayloadFromMessage(data: any, origin?: string): SsoPay
       nestedSource.displayName ||
       data.sso_name ||
       data.name ||
-      data.displayName;
+      data.displayName ||
+      decodedToken?.sso_name ||
+      decodedToken?.name;
 
-    const rawRole = nestedSource.sso_role || nestedSource.role || data.sso_role || data.role;
+    const rawRole =
+      nestedSource.sso_role ||
+      nestedSource.role ||
+      data.sso_role ||
+      data.role ||
+      decodedToken?.sso_role ||
+      decodedToken?.role;
+
     const rawModule =
       nestedSource.module || nestedSource.target || data.module || data.target;
 
@@ -444,67 +584,81 @@ export function stripSensitiveSsoParamsFromUrl(): void {
 }
 
 /**
- * Read persisted SSO session from localStorage safely.
+ * Read persisted SSO session from localStorage (primary) or sessionStorage (fallback).
  */
 export function getStoredSsoSession(): StoredSsoSession | null {
   try {
     if (typeof window === 'undefined') return null;
-    const isSsoActive = localStorage.getItem('eduplay_sso_active') === 'true';
-    const rawSession = localStorage.getItem(SSO_SESSION_KEY) || localStorage.getItem(SSO_USER_KEY);
-    if (rawSession) {
-      const parsed = JSON.parse(rawSession);
-      if (parsed && typeof parsed === 'object' && parsed.email) {
-        return parsed as StoredSsoSession;
+
+    const readFromStorage = (storage: Storage): StoredSsoSession | null => {
+      try {
+        const rawSession = storage.getItem(SSO_SESSION_KEY) || storage.getItem(SSO_USER_KEY);
+        if (rawSession) {
+          const parsed = JSON.parse(rawSession);
+          if (parsed && typeof parsed === 'object' && parsed.email) {
+            return parsed as StoredSsoSession;
+          }
+        }
+        const isSsoActive = storage.getItem('eduplay_sso_active') === 'true';
+        if (isSsoActive) {
+          const email = storage.getItem('eduplay_teacher_email');
+          if (email) {
+            const savedRole = storage.getItem('eduplay_active_role');
+            const savedName = storage.getItem('eduplay_teacher_name') || 'Giáo viên';
+            const savedModule = storage.getItem(ACTIVE_MODULE_KEY);
+            return {
+              email: email.trim().toLowerCase(),
+              name: savedName,
+              role: savedRole === 'admin' ? 'admin' : 'teacher',
+              teacherId: storage.getItem('eduplay_teacher_id') || undefined,
+              targetModule: sanitizeTeacherModule(savedModule),
+              authenticatedAt: Date.now()
+            };
+          }
+        }
+      } catch {
+        return null;
       }
-    }
-    if (isSsoActive) {
-      const email = localStorage.getItem('eduplay_teacher_email');
-      if (email) {
-        const savedRole = localStorage.getItem('eduplay_active_role');
-        const savedName = localStorage.getItem('eduplay_teacher_name') || 'Giáo viên';
-        const savedModule = localStorage.getItem(ACTIVE_MODULE_KEY);
-        return {
-          email: email.trim().toLowerCase(),
-          name: savedName,
-          role: savedRole === 'admin' ? 'admin' : 'teacher',
-          teacherId: localStorage.getItem('eduplay_teacher_id') || undefined,
-          targetModule: sanitizeTeacherModule(savedModule),
-          authenticatedAt: Date.now()
-        };
-      }
-    }
+      return null;
+    };
+
+    return readFromStorage(localStorage) || readFromStorage(sessionStorage);
   } catch {
     return null;
   }
-  return null;
 }
 
 /**
- * Persist verified SSO / embedded currentUser session to localStorage so page reloads & tab switches stay logged in.
+ * Persist verified SSO session to BOTH localStorage and sessionStorage for seamless reload & tab continuity.
  */
-export function persistSsoSessionToLocalStorage(session: StoredSsoSession): void {
+export function persistSsoSessionToStorages(session: StoredSsoSession): void {
   try {
     if (typeof window === 'undefined') return;
-    localStorage.setItem('eduplay_active_session', 'true');
-    localStorage.setItem('eduplay_sso_active', 'true');
-    localStorage.setItem('eduplay_active_role', session.role);
-    localStorage.setItem('eduplay_teacher_email', session.email);
-    localStorage.setItem('eduplay_teacher_name', session.name);
-    if (session.teacherId) {
-      localStorage.setItem('eduplay_teacher_id', session.teacherId);
-    }
-    if (session.token) {
-      localStorage.setItem(SSO_TOKEN_KEY, session.token);
-      sessionStorage.setItem(SSO_TOKEN_KEY, session.token);
-    }
-    if (session.targetModule) {
-      localStorage.setItem(ACTIVE_MODULE_KEY, session.targetModule);
-    }
-
     const serialized = JSON.stringify(session);
-    localStorage.setItem(SSO_SESSION_KEY, serialized);
-    localStorage.setItem(SSO_USER_KEY, serialized);
-    sessionStorage.setItem(SSO_SESSION_KEY, serialized);
+
+    const writeToStorage = (storage: Storage) => {
+      try {
+        storage.setItem('eduplay_active_session', 'true');
+        storage.setItem('eduplay_sso_active', 'true');
+        storage.setItem('eduplay_active_role', session.role);
+        storage.setItem('eduplay_teacher_email', session.email);
+        storage.setItem('eduplay_teacher_name', session.name);
+        if (session.teacherId) {
+          storage.setItem('eduplay_teacher_id', session.teacherId);
+        }
+        if (session.token) {
+          storage.setItem(SSO_TOKEN_KEY, session.token);
+        }
+        if (session.targetModule) {
+          storage.setItem(ACTIVE_MODULE_KEY, session.targetModule);
+        }
+        storage.setItem(SSO_SESSION_KEY, serialized);
+        storage.setItem(SSO_USER_KEY, serialized);
+      } catch {}
+    };
+
+    writeToStorage(localStorage);
+    writeToStorage(sessionStorage);
 
     window.dispatchEvent(
       new CustomEvent('eduplay_teacher_session_updated', {
@@ -517,17 +671,22 @@ export function persistSsoSessionToLocalStorage(session: StoredSsoSession): void
       })
     );
   } catch (storageErr) {
-    console.warn('Không thể lưu phiên SSO vào localStorage:', storageErr);
+    console.warn('Không thể lưu phiên SSO vào bộ nhớ trình duyệt:', storageErr);
   }
 }
 
 /**
- * Validate and authenticate a teacher SSO payload from the parent portal ("Dạy và Học Số PK Trực Khang").
+ * Backward-compatible alias for persisting SSO session.
+ */
+export const persistSsoSessionToLocalStorage = persistSsoSessionToStorages;
+
+/**
+ * Validate and authenticate an SSO payload from the parent portal ("Dạy và Học Số PK Trực Khang").
  */
 export async function authenticateSsoPayload(payload: SsoPayload): Promise<SsoAuthResult> {
   try {
-    // 1. Validate optional JWT/opaque token
-    const tokenCheck = validateSsoTokenConsistency(payload.token, payload.email);
+    // 1. Validate & decode optional sso_token (JWT or Base64 JSON)
+    const tokenCheck = validateAndDecodeSsoToken(payload.token, payload.email);
     if (!tokenCheck.valid) {
       return {
         authorized: false,
@@ -540,6 +699,9 @@ export async function authenticateSsoPayload(payload: SsoPayload): Promise<SsoAu
     }
 
     let resolvedEmail = (tokenCheck.derivedEmail || payload.email || '').trim().toLowerCase();
+    const resolvedInputName = payload.name || tokenCheck.derivedName;
+    const resolvedInputRole = payload.role || tokenCheck.derivedRole;
+    const resolvedInputModule = payload.module || tokenCheck.derivedModule;
 
     // 2. If parent sent a Firebase Custom Token, sign in to Firebase Auth directly
     if (payload.customToken && auth) {
@@ -553,11 +715,13 @@ export async function authenticateSsoPayload(payload: SsoPayload): Promise<SsoAu
       }
     }
 
-    // 3. Fallback to stored or default teacher session if auto_login / iframe handshake didn't pass email explicitly
+    // 3. Fallback to stored or default teacher session if embedded iframe hasn't transmitted explicit email yet
     if (!isValidEmailFormat(resolvedEmail)) {
       const existingStored = getStoredSsoSession();
       const storedTeacherEmail =
-        typeof window !== 'undefined' ? localStorage.getItem('eduplay_teacher_email') : null;
+        typeof window !== 'undefined'
+          ? localStorage.getItem('eduplay_teacher_email') || sessionStorage.getItem('eduplay_teacher_email')
+          : null;
       const candidate = (existingStored?.email || storedTeacherEmail || DEFAULT_SSO_FALLBACK_EMAIL)
         .trim()
         .toLowerCase();
@@ -572,35 +736,35 @@ export async function authenticateSsoPayload(payload: SsoPayload): Promise<SsoAu
         email: resolvedEmail,
         name: '',
         role: 'teacher',
-        targetModule: sanitizeTeacherModule(payload.module),
+        targetModule: sanitizeTeacherModule(resolvedInputModule),
         reason: 'Thiếu địa chỉ email hợp lệ để đăng nhập tự động.'
       };
     }
 
-    // 4. Lookup teacher authorization & profile in Firestore / whitelist / local database
+    // 4. Match teacher profile & permissions in Firestore / whitelist / local database
     const authCheck = await verifyTeacherAuthorization(resolvedEmail);
 
-    // Reject only if explicitly locked/inactive
+    // Reject only if explicitly locked/inactive in database
     if (!authCheck.authorized && authCheck.reason && authCheck.reason.toLowerCase().includes('tạm khóa')) {
       return {
         authorized: false,
         email: resolvedEmail,
         name: '',
         role: 'teacher',
-        targetModule: sanitizeTeacherModule(payload.module),
+        targetModule: sanitizeTeacherModule(resolvedInputModule),
         reason: authCheck.reason
       };
     }
 
     const requestedAdmin =
-      payload.role?.toLowerCase().includes('admin') ||
-      payload.role?.toLowerCase().includes('quản trị');
+      resolvedInputRole?.toLowerCase().includes('admin') ||
+      resolvedInputRole?.toLowerCase().includes('quản trị');
 
     const profile: TeacherProfileResult = authCheck.profile || {
       id: `sso-${resolvedEmail.split('@')[0]}`,
       name:
-        payload.name?.trim() ||
-        resolveTeacherNameByEmail(resolvedEmail, payload.name || null, undefined, requestedAdmin ? 'admin' : 'teacher'),
+        resolvedInputName?.trim() ||
+        resolveTeacherNameByEmail(resolvedEmail, resolvedInputName || null, undefined, requestedAdmin ? 'admin' : 'teacher'),
       email: resolvedEmail,
       role: requestedAdmin ? 'Quản trị viên (ADMIN)' : 'Giáo viên bộ môn',
       userRole: requestedAdmin ? 'admin' : 'teacher',
@@ -609,15 +773,15 @@ export async function authenticateSsoPayload(payload: SsoPayload): Promise<SsoAu
 
     const resolvedName =
       profile.name ||
-      resolveTeacherNameByEmail(resolvedEmail, payload.name || null, undefined, profile.userRole);
+      resolveTeacherNameByEmail(resolvedEmail, resolvedInputName || null, undefined, profile.userRole);
 
     const resolvedRole: UserRole =
       profile.userRole === 'admin' || requestedAdmin ? 'admin' : 'teacher';
 
-    const targetModule = sanitizeTeacherModule(payload.module);
+    const targetModule = sanitizeTeacherModule(resolvedInputModule);
 
-    // 5. Persist SSO session cleanly to localStorage (survives reload & tab navigation)
-    persistSsoSessionToLocalStorage({
+    // 5. Persist verified SSO session to BOTH localStorage and sessionStorage
+    persistSsoSessionToStorages({
       email: resolvedEmail,
       name: resolvedName,
       role: resolvedRole,
@@ -650,27 +814,52 @@ export async function authenticateSsoPayload(payload: SsoPayload): Promise<SsoAu
 }
 
 /**
- * Clear active local & session auth markers on explicit logout.
+ * Check synchronous SSO startup hint (URL params, iframe embed, or existing localStorage/sessionStorage session).
+ */
+export function resolveInitialSsoBootstrap(): {
+  urlPayload: SsoPayload | null;
+  storedSession: StoredSsoSession | null;
+  inIframe: boolean;
+  shouldBypassLogin: boolean;
+} {
+  const urlPayload = parseSsoParamsFromUrl();
+  const storedSession = getStoredSsoSession();
+  const inIframe = isEmbeddedInIframe();
+  const shouldBypassLogin = Boolean(urlPayload || storedSession || inIframe);
+  return { urlPayload, storedSession, inIframe, shouldBypassLogin };
+}
+
+/**
+ * Clear active localStorage & sessionStorage auth markers on explicit logout.
  */
 export async function clearAllAuthSessions(): Promise<void> {
+  const keysToRemove = [
+    'eduplay_active_session',
+    'eduplay_sso_active',
+    'eduplay_active_role',
+    'eduplay_teacher_email',
+    'eduplay_teacher_name',
+    'eduplay_teacher_id',
+    'eduplay_student_session',
+    SSO_SESSION_KEY,
+    SSO_USER_KEY,
+    SSO_TOKEN_KEY,
+    ACTIVE_MODULE_KEY
+  ];
+
   try {
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('eduplay_active_session');
-      localStorage.removeItem('eduplay_sso_active');
-      localStorage.removeItem('eduplay_active_role');
-      localStorage.removeItem('eduplay_teacher_email');
-      localStorage.removeItem('eduplay_teacher_name');
-      localStorage.removeItem('eduplay_teacher_id');
-      localStorage.removeItem('eduplay_student_session');
-      localStorage.removeItem(SSO_SESSION_KEY);
-      localStorage.removeItem(SSO_USER_KEY);
-      localStorage.removeItem(SSO_TOKEN_KEY);
-      localStorage.removeItem(ACTIVE_MODULE_KEY);
-      sessionStorage.removeItem(SSO_TOKEN_KEY);
-      sessionStorage.removeItem(SSO_SESSION_KEY);
+      for (const k of keysToRemove) {
+        try {
+          localStorage.removeItem(k);
+        } catch {}
+        try {
+          sessionStorage.removeItem(k);
+        } catch {}
+      }
     }
   } catch (err) {
-    console.warn('Lỗi khi xóa phiên đăng nhập local:', err);
+    console.warn('Lỗi khi xóa phiên đăng nhập:', err);
   }
 
   try {
