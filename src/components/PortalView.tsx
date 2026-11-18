@@ -22,7 +22,6 @@ import {
 } from '../services/studentStorageService';
 import { resolveTeacherNameByEmail, getCurrentTeacherProfile, verifyTeacherAuthorization } from '../services/teacherStorageService';
 import { useClassesList } from '../services/classStorageService';
-import { APP_NAME, APP_FULL_TITLE } from '../config/appConfig';
 import { getStudentAvatarSource } from './common/AnimalAvatars';
 
 interface PortalViewProps {
@@ -296,6 +295,14 @@ export function PortalView({ onSelectPortal }: PortalViewProps) {
   const [teacherName, setTeacherName] = useState<string>('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
+  const [portalNotice, setPortalNotice] = useState<string | null>(null);
+
+  const showPortalNotice = (msg: string) => {
+    setPortalNotice(msg);
+    setTimeout(() => {
+      setPortalNotice((prev) => (prev === msg ? null : prev));
+    }, 4500);
+  };
 
   const grades = useMemo(() => {
     const allGrades = ['Khối 3'];
@@ -733,7 +740,7 @@ export function PortalView({ onSelectPortal }: PortalViewProps) {
             </button>
             <button
               onClick={() =>
-                alert(`${APP_FULL_TITLE} - Nền tảng học tập tương tác & quản lý dạy học thông minh cho Tiểu học.`)
+                showPortalNotice('KHỐI 3 HỌC CÙNG AI - Nền tảng học tập tương tác & quản lý dạy học thông minh cho Tiểu học.')
               }
               className="p-2 bg-sky-50 hover:bg-sky-100 text-sky-700 rounded-full transition-colors cursor-pointer"
               title="Trợ giúp"
@@ -743,13 +750,26 @@ export function PortalView({ onSelectPortal }: PortalViewProps) {
           </div>
         </div>
 
+        {portalNotice && (
+          <div className="mb-4 px-4 py-2.5 rounded-2xl bg-sky-50 border border-sky-200 text-sky-800 text-xs font-semibold flex items-center justify-between gap-2 animate-in fade-in duration-200">
+            <span>{portalNotice}</span>
+            <button
+              type="button"
+              onClick={() => setPortalNotice(null)}
+              className="text-sky-600 hover:text-sky-900 font-bold px-1.5 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Portal Header - Positioned higher with elegant spacing */}
         <div className="text-center mb-6 sm:mb-8 pt-1">
           <div className="inline-flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-emerald-50 border border-emerald-200/80 text-emerald-600 mb-2 shadow-xs text-3xl sm:text-4xl transition-transform hover:scale-105">
             🍀
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-[#4F46E5] tracking-tight font-heading mt-1 uppercase">
-            {APP_NAME}
+            KHỐI 3 HỌC CÙNG AI
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-md mx-auto">
             Cổng Đăng Nhập & Học Tập Số Chuẩn Sư Phạm Tiểu Học
@@ -1150,8 +1170,8 @@ export function PortalView({ onSelectPortal }: PortalViewProps) {
                       onClick={() => {
                         const domain = authError.split(':')[1] || (typeof window !== 'undefined' ? window.location.hostname : '');
                         if (domain) {
-                          navigator.clipboard.writeText(domain);
-                          alert(`Đã sao chép tên miền vào bộ nhớ tạm:\n${domain}`);
+                          navigator.clipboard.writeText(domain).catch(() => {});
+                          showPortalNotice(`Đã sao chép tên miền vào bộ nhớ tạm: ${domain}`);
                         }
                       }}
                       className="px-2.5 py-1 bg-amber-200 hover:bg-amber-300 active:scale-95 text-amber-900 font-bold rounded-lg text-[11px] transition-all shrink-0 cursor-pointer shadow-2xs"
@@ -1264,14 +1284,14 @@ export function PortalView({ onSelectPortal }: PortalViewProps) {
         <div className="pt-4 border-t border-dashed border-slate-200 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-2">
           <button
             onClick={() =>
-              alert('Vui lòng liên hệ Quản trị viên nhà trường để cấp lại mật khẩu hoặc mã PIN truy cập.')
+              showPortalNotice('Vui lòng liên hệ Quản trị viên nhà trường để cấp lại mật khẩu hoặc mã PIN truy cập.')
             }
             className="flex items-center gap-1.5 text-amber-700 hover:text-amber-800 font-bold transition-colors cursor-pointer"
           >
             <KeyRound className="w-3.5 h-3.5" /> Quên mật mã / mã PIN?
           </button>
           <div className="text-slate-400 font-medium">
-            {APP_NAME} • Thiết kế dành riêng cho Tiểu học 🎒
+            KHỐI 3 HỌC CÙNG AI • Thiết kế dành riêng cho Tiểu học 🎒
           </div>
         </div>
 
