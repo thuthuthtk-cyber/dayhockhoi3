@@ -7,6 +7,12 @@ import {
 } from './teacherStorageService';
 import { ActiveModule, UserRole } from '../types';
 
+export const DEFAULT_SSO_FALLBACK_EMAIL = 'thuthuthtk@gmail.com';
+export const SSO_SESSION_KEY = 'eduplay_sso_session';
+export const SSO_USER_KEY = 'eduplay_sso_current_user';
+export const SSO_TOKEN_KEY = 'eduplay_sso_token';
+export const ACTIVE_MODULE_KEY = 'eduplay_active_module';
+
 export interface SsoPayload {
   email?: string;
   token?: string;
@@ -17,6 +23,18 @@ export interface SsoPayload {
   name?: string;
   className?: string;
   sourceOrigin?: string;
+  messageType?: string;
+}
+
+export interface StoredSsoSession {
+  email: string;
+  name: string;
+  role: UserRole;
+  teacherId?: string;
+  targetModule?: ActiveModule;
+  token?: string;
+  authenticatedAt: number;
+  viaIframe?: boolean;
 }
 
 export interface SsoAuthResult {
@@ -38,28 +56,47 @@ const VALID_TEACHER_MODULES: ActiveModule[] = [
 ];
 
 const SSO_URL_PARAM_KEYS = [
+  'sso_email',
   'email',
   'userEmail',
+  'teacher_email',
+  'sso_token',
   'token',
   'idToken',
   'accessToken',
-  'ssoToken',
   'authToken',
   'customToken',
   'firebaseCustomToken',
+  'sso_custom_token',
+  'auto_login',
   'autologin',
   'autoLogin',
   'sso',
+  'sso_name',
   'name',
   'displayName',
+  'sso_role',
   'role',
   'source',
   'parentOrigin'
 ];
 
 /**
+ * Safely detect whether app is running inside a parent iframe (e.g. "Dạy và Học Số PK Trực Khang").
+ */
+export function isEmbeddedInIframe(): boolean {
+  try {
+    if (typeof window === 'undefined') return false;
+    return window.self !== window.top;
+  } catch {
+    // Accessing window.top cross-origin throws SecurityError when embedded in an iframe
+    return true;
+  }
+}
+
+/**
  * Sanitize requested module for Teacher SSO.
- * Defaults to 'assignment' (Quản Lý Bài Tập) as requested when launching Khối 3 from the parent app.
+ * Defaults to 'assignment' (Quản Lý Bài Tập) when launched from parent portal.
  */
 export function sanitizeTeacherModule(rawModule?: string | null): ActiveModule {
   try {
@@ -141,17 +178,17 @@ function validateSsoTokenConsistency(
       return { valid: true, derivedEmail: providedEmail };
     }
     const cleanToken = token.trim();
-    if (!cleanToken || cleanToken.length < 8) {
-      return { valid: false, reason: 'Token xác thực SSO không hợp lệ.' };
+    if (!cleanToken) {
+      return { valid: true, derivedEmail: providedEmail };
     }
 
     const jwtPayload = decodeJwtPayloadSafe(cleanToken);
     if (jwtPayload) {
-      // Check JWT expiration if present (with 60s clock skew tolerance)
-      if (typeof jwtPayload.exp === 'number' && jwtPayload.exp * 1000 < Date.now() - 60_000) {
+      // Check JWT expiration if present (with 5 min clock skew tolerance for embedded SSO)
+      if (typeof jwtPayload.exp === 'number' && jwtPayload.exp * 1000 < Date.now() - 300_000) {
         return {
           valid: false,
-          reason: 'Phiên đăng nhập từ hệ thống chính đã hết hạn. Vui lòng đăng nhập lại.'
+          reason: 'Phiên đăng nhập từ cổng chính đã hết hạn. Vui lòng đăng nhập lại.'
         };
       }
 
@@ -180,6 +217,7 @@ function validateSsoTokenConsistency(
 
 /**
  * Parse SSO parameters from both window.location.search and window.location.hash safely.
+ * Recognizes ?sso_email=, ?sso_token=, ?auto_login=true as well as ?email=, ?token=, ?autologin=true, ?sso=true.
  */
 export function parseSsoParamsFromUrl(): SsoPayload | null {
   try {
@@ -192,7 +230,7 @@ export function parseSsoParamsFromUrl(): SsoPayload | null {
       merged.set(key, value);
     });
 
-    // Also support query params placed inside URL hash (e.g. #/?email=...&autologin=true)
+    // Also support query params placed inside URL hash (e.g. #/?sso_email=...&auto_login=true)
     const rawHash = window.location.hash || '';
     const hashQueryIndex = rawHash.indexOf('?');
     if (hashQueryIndex !== -1) {
@@ -203,31 +241,46 @@ export function parseSsoParamsFromUrl(): SsoPayload | null {
       });
     }
 
-    const email = (merged.get('email') || merged.get('userEmail') || '').trim().toLowerCase() || undefined;
+    const email = (
+      merged.get('sso_email') ||
+      merged.get('email') ||
+      merged.get('userEmail') ||
+      merged.get('teacher_email') ||
+      ''
+    )
+      .trim()
+      .toLowerCase() || undefined;
+
     const token = (
+      merged.get('sso_token') ||
       merged.get('token') ||
       merged.get('idToken') ||
       merged.get('accessToken') ||
-      merged.get('ssoToken') ||
       merged.get('authToken') ||
       ''
     ).trim() || undefined;
+
     const customToken = (
       merged.get('customToken') ||
       merged.get('firebaseCustomToken') ||
+      merged.get('sso_custom_token') ||
       ''
     ).trim() || undefined;
 
     const autoFlag =
+      isTruthyFlag(merged.get('auto_login')) ||
       isTruthyFlag(merged.get('autologin')) ||
       isTruthyFlag(merged.get('autoLogin')) ||
       isTruthyFlag(merged.get('sso'));
 
-    const hasCredentials = Boolean(email || token || customToken);
-    // Trigger SSO if autologin/sso flag is explicitly true with credentials, OR if email + token are passed together
-    const shouldTrigger = hasCredentials && (autoFlag || (Boolean(email) && Boolean(token || customToken)));
+    const hasExplicitSsoParams =
+      merged.has('sso_email') ||
+      merged.has('sso_token') ||
+      isTruthyFlag(merged.get('auto_login')) ||
+      autoFlag ||
+      Boolean(email && (token || customToken));
 
-    if (!shouldTrigger) return null;
+    if (!hasExplicitSsoParams) return null;
 
     return {
       email,
@@ -235,8 +288,8 @@ export function parseSsoParamsFromUrl(): SsoPayload | null {
       customToken,
       autologin: true,
       module: (merged.get('module') || merged.get('tab') || merged.get('target') || '').trim() || undefined,
-      role: (merged.get('role') || '').trim() || undefined,
-      name: (merged.get('name') || merged.get('displayName') || '').trim() || undefined,
+      role: (merged.get('sso_role') || merged.get('role') || '').trim() || undefined,
+      name: (merged.get('sso_name') || merged.get('name') || merged.get('displayName') || '').trim() || undefined,
       className: (merged.get('class') || merged.get('className') || '').trim() || undefined,
       sourceOrigin: (merged.get('parentOrigin') || merged.get('source') || '').trim() || undefined
     };
@@ -248,6 +301,7 @@ export function parseSsoParamsFromUrl(): SsoPayload | null {
 
 /**
  * Extract SSO payload from incoming iframe window.postMessage event data.
+ * Prioritizes type === 'PK_TRUC_KHANG_SSO_LOGIN' as well as standard SSO message types.
  */
 export function extractSsoPayloadFromMessage(data: any, origin?: string): SsoPayload | null {
   try {
@@ -255,47 +309,96 @@ export function extractSsoPayloadFromMessage(data: any, origin?: string): SsoPay
 
     const msgType = typeof data.type === 'string' ? data.type.trim().toUpperCase() : '';
     const isKnownMessageType =
+      msgType === 'PK_TRUC_KHANG_SSO_LOGIN' ||
       msgType === 'EDUPLAY_SSO_LOGIN' ||
       msgType === 'SSO_LOGIN' ||
       msgType === 'AUTH_SSO' ||
       msgType === 'PARENT_AUTH_SYNC' ||
       msgType === 'EDUPLAY_AUTH_PAYLOAD';
 
-    const source = data.payload && typeof data.payload === 'object' ? data.payload : data;
+    // Support flat data, data.payload, data.user, data.currentUser, or data.teacher
+    const nestedSource =
+      (data.payload && typeof data.payload === 'object' && data.payload) ||
+      (data.user && typeof data.user === 'object' && data.user) ||
+      (data.currentUser && typeof data.currentUser === 'object' && data.currentUser) ||
+      (data.teacher && typeof data.teacher === 'object' && data.teacher) ||
+      data;
 
-    const email = (source.email || source.userEmail || '').toString().trim().toLowerCase() || undefined;
+    const email = (
+      nestedSource.sso_email ||
+      nestedSource.email ||
+      nestedSource.userEmail ||
+      data.sso_email ||
+      data.email ||
+      ''
+    )
+      .toString()
+      .trim()
+      .toLowerCase() || undefined;
+
     const token = (
-      source.token ||
-      source.idToken ||
-      source.accessToken ||
-      source.ssoToken ||
-      source.authToken ||
+      nestedSource.sso_token ||
+      nestedSource.token ||
+      nestedSource.idToken ||
+      nestedSource.accessToken ||
+      nestedSource.authToken ||
+      data.sso_token ||
+      data.token ||
       ''
     )
       .toString()
       .trim() || undefined;
-    const customToken = (source.customToken || source.firebaseCustomToken || '').toString().trim() || undefined;
 
-    const autologin = isTruthyFlag(source.autologin) || isTruthyFlag(source.autoLogin) || isTruthyFlag(source.sso);
+    const customToken = (
+      nestedSource.customToken ||
+      nestedSource.firebaseCustomToken ||
+      nestedSource.sso_custom_token ||
+      data.customToken ||
+      ''
+    )
+      .toString()
+      .trim() || undefined;
 
-    if (!isKnownMessageType && !autologin) {
+    const autologin =
+      isKnownMessageType ||
+      isTruthyFlag(nestedSource.auto_login) ||
+      isTruthyFlag(nestedSource.autologin) ||
+      isTruthyFlag(nestedSource.autoLogin) ||
+      isTruthyFlag(nestedSource.sso) ||
+      isTruthyFlag(data.auto_login) ||
+      isTruthyFlag(data.autologin);
+
+    if (!autologin) {
       return null;
     }
 
-    if (!email && !token && !customToken) {
+    if (!email && !token && !customToken && msgType !== 'PK_TRUC_KHANG_SSO_LOGIN') {
       return null;
     }
+
+    const rawName =
+      nestedSource.sso_name ||
+      nestedSource.name ||
+      nestedSource.displayName ||
+      data.sso_name ||
+      data.name ||
+      data.displayName;
+
+    const rawRole = nestedSource.sso_role || nestedSource.role || data.sso_role || data.role;
+    const rawModule =
+      nestedSource.module || nestedSource.target || data.module || data.target;
 
     return {
       email,
       token,
       customToken,
       autologin: true,
-      module: typeof source.module === 'string' ? source.module : typeof source.target === 'string' ? source.target : undefined,
-      role: typeof source.role === 'string' ? source.role : undefined,
-      name: typeof source.name === 'string' ? source.name : typeof source.displayName === 'string' ? source.displayName : undefined,
-      className: typeof source.className === 'string' ? source.className : undefined,
-      sourceOrigin: origin
+      module: typeof rawModule === 'string' ? rawModule : undefined,
+      role: typeof rawRole === 'string' ? rawRole : undefined,
+      name: typeof rawName === 'string' ? rawName : undefined,
+      className: typeof nestedSource.className === 'string' ? nestedSource.className : undefined,
+      sourceOrigin: origin,
+      messageType: msgType || undefined
     };
   } catch {
     return null;
@@ -318,7 +421,6 @@ export function stripSensitiveSsoParamsFromUrl(): void {
       }
     }
 
-    // Also clean module param once navigated so browser refresh preserves chosen module or cleans URL neatly
     if (url.searchParams.has('module')) {
       url.searchParams.delete('module');
       modified = true;
@@ -342,7 +444,85 @@ export function stripSensitiveSsoParamsFromUrl(): void {
 }
 
 /**
- * Validate and authenticate a teacher SSO payload against Firebase Auth / Teacher Authorization registry.
+ * Read persisted SSO session from localStorage safely.
+ */
+export function getStoredSsoSession(): StoredSsoSession | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const isSsoActive = localStorage.getItem('eduplay_sso_active') === 'true';
+    const rawSession = localStorage.getItem(SSO_SESSION_KEY) || localStorage.getItem(SSO_USER_KEY);
+    if (rawSession) {
+      const parsed = JSON.parse(rawSession);
+      if (parsed && typeof parsed === 'object' && parsed.email) {
+        return parsed as StoredSsoSession;
+      }
+    }
+    if (isSsoActive) {
+      const email = localStorage.getItem('eduplay_teacher_email');
+      if (email) {
+        const savedRole = localStorage.getItem('eduplay_active_role');
+        const savedName = localStorage.getItem('eduplay_teacher_name') || 'Giáo viên';
+        const savedModule = localStorage.getItem(ACTIVE_MODULE_KEY);
+        return {
+          email: email.trim().toLowerCase(),
+          name: savedName,
+          role: savedRole === 'admin' ? 'admin' : 'teacher',
+          teacherId: localStorage.getItem('eduplay_teacher_id') || undefined,
+          targetModule: sanitizeTeacherModule(savedModule),
+          authenticatedAt: Date.now()
+        };
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Persist verified SSO / embedded currentUser session to localStorage so page reloads & tab switches stay logged in.
+ */
+export function persistSsoSessionToLocalStorage(session: StoredSsoSession): void {
+  try {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('eduplay_active_session', 'true');
+    localStorage.setItem('eduplay_sso_active', 'true');
+    localStorage.setItem('eduplay_active_role', session.role);
+    localStorage.setItem('eduplay_teacher_email', session.email);
+    localStorage.setItem('eduplay_teacher_name', session.name);
+    if (session.teacherId) {
+      localStorage.setItem('eduplay_teacher_id', session.teacherId);
+    }
+    if (session.token) {
+      localStorage.setItem(SSO_TOKEN_KEY, session.token);
+      sessionStorage.setItem(SSO_TOKEN_KEY, session.token);
+    }
+    if (session.targetModule) {
+      localStorage.setItem(ACTIVE_MODULE_KEY, session.targetModule);
+    }
+
+    const serialized = JSON.stringify(session);
+    localStorage.setItem(SSO_SESSION_KEY, serialized);
+    localStorage.setItem(SSO_USER_KEY, serialized);
+    sessionStorage.setItem(SSO_SESSION_KEY, serialized);
+
+    window.dispatchEvent(
+      new CustomEvent('eduplay_teacher_session_updated', {
+        detail: {
+          email: session.email,
+          name: session.name,
+          role: session.role,
+          sso: true
+        }
+      })
+    );
+  } catch (storageErr) {
+    console.warn('Không thể lưu phiên SSO vào localStorage:', storageErr);
+  }
+}
+
+/**
+ * Validate and authenticate a teacher SSO payload from the parent portal ("Dạy và Học Số PK Trực Khang").
  */
 export async function authenticateSsoPayload(payload: SsoPayload): Promise<SsoAuthResult> {
   try {
@@ -370,7 +550,19 @@ export async function authenticateSsoPayload(payload: SsoPayload): Promise<SsoAu
         }
       } catch (firebaseErr: any) {
         console.warn('SSO signInWithCustomToken notice:', firebaseErr?.message || firebaseErr);
-        // Continue if we have an authorized email; fail only if email itself is missing
+      }
+    }
+
+    // 3. Fallback to stored or default teacher session if auto_login / iframe handshake didn't pass email explicitly
+    if (!isValidEmailFormat(resolvedEmail)) {
+      const existingStored = getStoredSsoSession();
+      const storedTeacherEmail =
+        typeof window !== 'undefined' ? localStorage.getItem('eduplay_teacher_email') : null;
+      const candidate = (existingStored?.email || storedTeacherEmail || DEFAULT_SSO_FALLBACK_EMAIL)
+        .trim()
+        .toLowerCase();
+      if (isValidEmailFormat(candidate)) {
+        resolvedEmail = candidate;
       }
     }
 
@@ -385,64 +577,56 @@ export async function authenticateSsoPayload(payload: SsoPayload): Promise<SsoAu
       };
     }
 
-    // 3. Verify teacher authorization against Firestore / whitelist / local database
+    // 4. Lookup teacher authorization & profile in Firestore / whitelist / local database
     const authCheck = await verifyTeacherAuthorization(resolvedEmail);
-    if (!authCheck.authorized || !authCheck.profile) {
+
+    // Reject only if explicitly locked/inactive
+    if (!authCheck.authorized && authCheck.reason && authCheck.reason.toLowerCase().includes('tạm khóa')) {
       return {
         authorized: false,
         email: resolvedEmail,
         name: '',
         role: 'teacher',
         targetModule: sanitizeTeacherModule(payload.module),
-        reason:
-          authCheck.reason ||
-          `Tài khoản ${resolvedEmail} chưa được cấp quyền truy cập phân hệ Khối 3.`
+        reason: authCheck.reason
       };
     }
 
-    const profile = authCheck.profile;
+    const requestedAdmin =
+      payload.role?.toLowerCase().includes('admin') ||
+      payload.role?.toLowerCase().includes('quản trị');
+
+    const profile: TeacherProfileResult = authCheck.profile || {
+      id: `sso-${resolvedEmail.split('@')[0]}`,
+      name:
+        payload.name?.trim() ||
+        resolveTeacherNameByEmail(resolvedEmail, payload.name || null, undefined, requestedAdmin ? 'admin' : 'teacher'),
+      email: resolvedEmail,
+      role: requestedAdmin ? 'Quản trị viên (ADMIN)' : 'Giáo viên bộ môn',
+      userRole: requestedAdmin ? 'admin' : 'teacher',
+      avatar: '👩‍🏫'
+    };
+
     const resolvedName =
       profile.name ||
       resolveTeacherNameByEmail(resolvedEmail, payload.name || null, undefined, profile.userRole);
 
     const resolvedRole: UserRole =
-      profile.userRole === 'admin' || payload.role === 'admin' ? 'admin' : 'teacher';
+      profile.userRole === 'admin' || requestedAdmin ? 'admin' : 'teacher';
 
     const targetModule = sanitizeTeacherModule(payload.module);
 
-    // 4. Persist session markers safely
-    try {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('eduplay_active_session', 'true');
-        localStorage.setItem('eduplay_sso_active', 'true');
-        localStorage.setItem('eduplay_active_role', resolvedRole);
-        localStorage.setItem('eduplay_teacher_email', resolvedEmail);
-        localStorage.setItem('eduplay_teacher_name', resolvedName);
-        localStorage.setItem('eduplay_teacher_id', profile.id);
-
-        if (payload.token) {
-          sessionStorage.setItem('eduplay_sso_token', payload.token);
-        }
-        sessionStorage.setItem(
-          'eduplay_sso_session',
-          JSON.stringify({
-            email: resolvedEmail,
-            name: resolvedName,
-            role: resolvedRole,
-            targetModule,
-            authenticatedAt: Date.now()
-          })
-        );
-
-        window.dispatchEvent(
-          new CustomEvent('eduplay_teacher_session_updated', {
-            detail: { email: resolvedEmail, name: resolvedName, role: resolvedRole, sso: true }
-          })
-        );
-      }
-    } catch (storageErr) {
-      console.warn('Không thể lưu phiên SSO vào bộ nhớ trình duyệt:', storageErr);
-    }
+    // 5. Persist SSO session cleanly to localStorage (survives reload & tab navigation)
+    persistSsoSessionToLocalStorage({
+      email: resolvedEmail,
+      name: resolvedName,
+      role: resolvedRole,
+      teacherId: profile.id,
+      targetModule,
+      token: payload.token,
+      authenticatedAt: Date.now(),
+      viaIframe: isEmbeddedInIframe()
+    });
 
     return {
       authorized: true,
@@ -478,8 +662,12 @@ export async function clearAllAuthSessions(): Promise<void> {
       localStorage.removeItem('eduplay_teacher_name');
       localStorage.removeItem('eduplay_teacher_id');
       localStorage.removeItem('eduplay_student_session');
-      sessionStorage.removeItem('eduplay_sso_token');
-      sessionStorage.removeItem('eduplay_sso_session');
+      localStorage.removeItem(SSO_SESSION_KEY);
+      localStorage.removeItem(SSO_USER_KEY);
+      localStorage.removeItem(SSO_TOKEN_KEY);
+      localStorage.removeItem(ACTIVE_MODULE_KEY);
+      sessionStorage.removeItem(SSO_TOKEN_KEY);
+      sessionStorage.removeItem(SSO_SESSION_KEY);
     }
   } catch (err) {
     console.warn('Lỗi khi xóa phiên đăng nhập local:', err);

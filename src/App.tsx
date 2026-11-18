@@ -24,9 +24,13 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { resolveTeacherNameByEmail, verifyTeacherAuthorization } from './services/teacherStorageService';
 import { getStudentsFromLocalStorage } from './services/studentStorageService';
 import {
+  ACTIVE_MODULE_KEY,
+  DEFAULT_SSO_FALLBACK_EMAIL,
+  isEmbeddedInIframe,
   parseSsoParamsFromUrl,
   extractSsoPayloadFromMessage,
   authenticateSsoPayload,
+  getStoredSsoSession,
   stripSensitiveSsoParamsFromUrl,
   sanitizeTeacherModule,
   clearAllAuthSessions
@@ -61,11 +65,12 @@ import {
 import { CheckCircle2, AlertCircle, Info, Sparkles, X } from 'lucide-react';
 import { RewardToastNotification } from './components/common/RewardToastNotification';
 
-const DEFAULT_TEACHER_EMAIL = 'thuthuthtk@gmail.com';
+const DEFAULT_TEACHER_EMAIL = DEFAULT_SSO_FALLBACK_EMAIL;
 
 function checkHasSavedSession(): boolean {
   try {
     if (typeof window === 'undefined') return false;
+    if (getStoredSsoSession()) return true;
     const isActive = localStorage.getItem('eduplay_active_session') === 'true';
     if (!isActive) return false;
     const savedRole = localStorage.getItem('eduplay_active_role');
@@ -80,43 +85,62 @@ function checkHasSavedSession(): boolean {
 
 export function App() {
   const initialSsoHint = React.useMemo(() => parseSsoParamsFromUrl(), []);
+  const initialInIframe = React.useMemo(() => isEmbeddedInIframe(), []);
+  const initialStoredSso = React.useMemo(() => getStoredSsoSession(), []);
 
+  // Bypass login immediately if URL has SSO params, embedded inside iframe, or saved SSO/active session exists in localStorage
   const [showPortal, setShowPortal] = useState<boolean>(() => {
-    if (initialSsoHint) return false;
+    if (initialSsoHint || initialInIframe || initialStoredSso) return false;
     return !checkHasSavedSession();
   });
-  const [isSsoAuthenticating, setIsSsoAuthenticating] = useState<boolean>(() => Boolean(initialSsoHint));
+  const [isSsoAuthenticating, setIsSsoAuthenticating] = useState<boolean>(false);
 
   const [activeModule, setActiveModule] = useState<ModuleType>(() => {
     if (initialSsoHint) {
       return sanitizeTeacherModule(initialSsoHint.module);
     }
     if (typeof window !== 'undefined') {
-      const savedRole = localStorage.getItem('eduplay_active_role');
-      if (savedRole === 'student') return 'assignment';
+      try {
+        const savedModule = localStorage.getItem(ACTIVE_MODULE_KEY);
+        if (savedModule) {
+          return sanitizeTeacherModule(savedModule);
+        }
+        if (initialInIframe || initialStoredSso) {
+          return 'assignment';
+        }
+        const savedRole = localStorage.getItem('eduplay_active_role');
+        if (savedRole === 'student') return 'assignment';
+      } catch {
+        if (initialInIframe) return 'assignment';
+      }
     }
     return 'lesson_5e';
   });
+
   const [userRole, setUserRole] = useState<UserRole>(() => {
     if (initialSsoHint) {
       return initialSsoHint.role === 'admin' ? 'admin' : 'teacher';
     }
-    if (typeof window === 'undefined') return 'teacher';
+    if (initialStoredSso?.role) {
+      return initialStoredSso.role;
+    }
+    if (typeof window === 'undefined') return initialInIframe ? 'admin' : 'teacher';
     try {
       const savedRole = localStorage.getItem('eduplay_active_role');
       if (savedRole === 'student' || savedRole === 'teacher' || savedRole === 'admin') {
         return savedRole;
       }
     } catch {
-      return 'teacher';
+      return initialInIframe ? 'admin' : 'teacher';
     }
-    return 'teacher';
+    return initialInIframe ? 'admin' : 'teacher';
   });
   const [gameInitialTab, setGameInitialTab] = useState<'games' | 'store'>('games');
 
-  // Teacher Session State (populated cleanly from SSO or explicit Portal login)
+  // Teacher Session State (populated cleanly from SSO, iframe, localStorage, or Portal login)
   const [teacherEmail, setTeacherEmail] = useState<string>(() => {
     if (initialSsoHint?.email) return initialSsoHint.email;
+    if (initialStoredSso?.email) return initialStoredSso.email;
     if (typeof window !== 'undefined') {
       try {
         const savedEmail = localStorage.getItem('eduplay_teacher_email');
@@ -128,6 +152,9 @@ export function App() {
   const [teacherName, setTeacherName] = useState<string>(() => {
     if (initialSsoHint?.email) {
       return resolveTeacherNameByEmail(initialSsoHint.email, initialSsoHint.name || null, undefined, 'teacher');
+    }
+    if (initialStoredSso?.name) {
+      return initialStoredSso.name;
     }
     if (typeof window !== 'undefined') {
       try {
@@ -302,17 +329,20 @@ export function App() {
     }
   }, [userRole, activeModule]);
 
-  // SSO Auto-Login Handler (URL parameters + iframe window.postMessage)
+  // SSO Auto-Login Handler (URL parameters + iframe embed + window.postMessage PK_TRUC_KHANG_SSO_LOGIN)
   useEffect(() => {
     let isMounted = true;
 
     const applySsoPayload = async (
       payload: ReturnType<typeof parseSsoParamsFromUrl>,
-      replyTarget?: { win: Window | null; origin?: string }
+      options?: {
+        replyTarget?: { win: Window | null; origin?: string };
+        preserveActiveModuleIfNoParam?: boolean;
+        silentToast?: boolean;
+      }
     ) => {
       if (!payload) return;
       try {
-        if (isMounted) setIsSsoAuthenticating(true);
         const result = await authenticateSsoPayload(payload);
         stripSensitiveSsoParamsFromUrl();
 
@@ -322,22 +352,30 @@ export function App() {
           setTeacherEmail(result.email);
           setTeacherName(result.name);
           setUserRole(result.role);
-          setActiveModule(result.targetModule);
           setShowPortal(false);
 
-          setToastNotification({
-            id: Date.now(),
-            title: 'Đăng nhập SSO thành công',
-            message: `Xin chào ${result.name} — đã mở Quản lý Bài tập Khối 3.`,
-            type: 'success'
-          });
-          setTimeout(() => {
-            if (isMounted) setToastNotification(null);
-          }, 4000);
-
-          if (replyTarget?.win) {
+          if (payload.module || !options?.preserveActiveModuleIfNoParam) {
+            setActiveModule(result.targetModule);
             try {
-              replyTarget.win.postMessage(
+              localStorage.setItem(ACTIVE_MODULE_KEY, result.targetModule);
+            } catch {}
+          }
+
+          if (!options?.silentToast) {
+            setToastNotification({
+              id: Date.now(),
+              title: 'Đăng nhập SSO thành công',
+              message: `Xin chào ${result.name} — đã mở Quản lý Bài tập Khối 3.`,
+              type: 'success'
+            });
+            setTimeout(() => {
+              if (isMounted) setToastNotification(null);
+            }, 4000);
+          }
+
+          if (options?.replyTarget?.win) {
+            try {
+              options.replyTarget.win.postMessage(
                 {
                   type: 'EDUPLAY_SSO_AUTHENTICATED',
                   success: true,
@@ -345,14 +383,16 @@ export function App() {
                   role: result.role,
                   module: result.targetModule
                 },
-                replyTarget.origin && replyTarget.origin !== 'null' ? replyTarget.origin : '*'
+                options.replyTarget.origin && options.replyTarget.origin !== 'null'
+                  ? options.replyTarget.origin
+                  : '*'
               );
             } catch {}
           }
         } else {
           await clearAllAuthSessions();
           if (isMounted) {
-            setShowPortal(true);
+            setShowPortal(!initialInIframe);
             setToastNotification({
               id: Date.now(),
               title: 'Không thể tự động đăng nhập',
@@ -361,15 +401,17 @@ export function App() {
             });
           }
 
-          if (replyTarget?.win) {
+          if (options?.replyTarget?.win) {
             try {
-              replyTarget.win.postMessage(
+              options.replyTarget.win.postMessage(
                 {
                   type: 'EDUPLAY_SSO_AUTHENTICATED',
                   success: false,
                   reason: result.reason
                 },
-                replyTarget.origin && replyTarget.origin !== 'null' ? replyTarget.origin : '*'
+                options.replyTarget.origin && options.replyTarget.origin !== 'null'
+                  ? options.replyTarget.origin
+                  : '*'
               );
             } catch {}
           }
@@ -377,33 +419,58 @@ export function App() {
       } catch (err: any) {
         console.warn('SSO execution error:', err);
         stripSensitiveSsoParamsFromUrl();
-        if (isMounted) {
+        if (isMounted && !initialInIframe) {
           setShowPortal(true);
-          setToastNotification({
-            id: Date.now(),
-            title: 'Lỗi xác thực SSO',
-            message: err?.message || 'Vui lòng đăng nhập thủ công qua Cổng Giáo Viên.',
-            type: 'error'
-          });
         }
       } finally {
         if (isMounted) setIsSsoAuthenticating(false);
       }
     };
 
-    // 1. Check URL query / hash parameters on startup
+    // 1. Check URL query / hash parameters OR iframe embed on startup
     if (initialSsoHint) {
-      const parentWin = typeof window !== 'undefined' && window.self !== window.top ? window.parent : null;
-      applySsoPayload(initialSsoHint, parentWin ? { win: parentWin, origin: '*' } : undefined);
+      const parentWin = initialInIframe ? window.parent : null;
+      applySsoPayload(initialSsoHint, {
+        replyTarget: parentWin ? { win: parentWin, origin: '*' } : undefined,
+        preserveActiveModuleIfNoParam: false
+      });
+    } else if (initialInIframe || initialStoredSso) {
+      // Running inside parent iframe or reloading with saved SSO session: ensure localStorage persists immediately
+      const fallbackEmail = initialStoredSso?.email || teacherEmail || DEFAULT_TEACHER_EMAIL;
+      const fallbackName = initialStoredSso?.name || teacherName;
+      const fallbackRole = initialStoredSso?.role || (userRole === 'admin' ? 'admin' : 'teacher');
+      const savedMod = (() => {
+        try {
+          return localStorage.getItem(ACTIVE_MODULE_KEY) || undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      applySsoPayload(
+        {
+          email: fallbackEmail,
+          name: fallbackName,
+          role: fallbackRole,
+          autologin: true,
+          module: savedMod || 'assignment'
+        },
+        {
+          preserveActiveModuleIfNoParam: true,
+          silentToast: true
+        }
+      );
     }
 
-    // 2. Listen for iframe postMessage credentials from Parent App
+    // 2. Listen for iframe postMessage credentials (PK_TRUC_KHANG_SSO_LOGIN & standard SSO types)
     const handlePostMessage = (event: MessageEvent) => {
       try {
         const ssoPayload = extractSsoPayloadFromMessage(event.data, event.origin);
         if (!ssoPayload) return;
-        const sourceWin = (event.source as Window | null) || (window.self !== window.top ? window.parent : null);
-        applySsoPayload(ssoPayload, sourceWin ? { win: sourceWin, origin: event.origin } : undefined);
+        const sourceWin = (event.source as Window | null) || (initialInIframe ? window.parent : null);
+        applySsoPayload(ssoPayload, {
+          replyTarget: sourceWin ? { win: sourceWin, origin: event.origin } : undefined,
+          preserveActiveModuleIfNoParam: false
+        });
       } catch (err) {
         console.warn('postMessage SSO handler warning:', err);
       }
@@ -411,9 +478,10 @@ export function App() {
 
     window.addEventListener('message', handlePostMessage);
 
-    // 3. Notify Parent App that Khối 3 iframe is ready to receive SSO credentials
+    // 3. Notify Parent App that Khối 3 iframe is mounted and ready to receive PK_TRUC_KHANG_SSO_LOGIN
     try {
-      if (window.self !== window.top && window.parent) {
+      if (initialInIframe && window.parent) {
+        window.parent.postMessage({ type: 'PK_TRUC_KHANG_SSO_READY', app: 'khoi3' }, '*');
         window.parent.postMessage({ type: 'EDUPLAY_SSO_READY', app: 'khoi3' }, '*');
       }
     } catch {}
@@ -422,7 +490,7 @@ export function App() {
       isMounted = false;
       window.removeEventListener('message', handlePostMessage);
     };
-  }, [initialSsoHint]);
+  }, [initialSsoHint, initialInIframe, initialStoredSso]);
 
   // Sync Firebase Auth state when an active Firebase session exists (does not override SSO or student login)
   useEffect(() => {
@@ -697,6 +765,13 @@ export function App() {
     setActiveModule('lesson_5e');
   };
 
+  const handleSelectModule = (mod: ModuleType) => {
+    setActiveModule(mod);
+    try {
+      localStorage.setItem(ACTIVE_MODULE_KEY, mod);
+    } catch {}
+  };
+
   if (isSsoAuthenticating) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans">
@@ -737,7 +812,7 @@ export function App() {
         {/* Unified Horizontal Topbar Navigation (Teacher & Student) */}
         <Sidebar
           activeModule={activeModule}
-          onSelectModule={setActiveModule}
+          onSelectModule={handleSelectModule}
           userRole={userRole}
           badgeCounts={{
             lessonsCount: lessons5E.length,
