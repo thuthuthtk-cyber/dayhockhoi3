@@ -25,7 +25,6 @@ import { resolveTeacherNameByEmail, verifyTeacherAuthorization } from './service
 import { getStudentsFromLocalStorage } from './services/studentStorageService';
 import {
   ACTIVE_MODULE_KEY,
-  DEFAULT_SSO_FALLBACK_EMAIL,
   resolveInitialSsoBootstrap,
   parseSsoParamsFromUrl,
   extractSsoPayloadFromMessage,
@@ -66,8 +65,6 @@ import {
 import { CheckCircle2, AlertCircle, Info, Sparkles, X } from 'lucide-react';
 import { RewardToastNotification } from './components/common/RewardToastNotification';
 
-const DEFAULT_TEACHER_EMAIL = DEFAULT_SSO_FALLBACK_EMAIL;
-
 function checkHasSavedSession(): boolean {
   try {
     if (typeof window === 'undefined') return false;
@@ -78,7 +75,8 @@ function checkHasSavedSession(): boolean {
     if (savedRole === 'student') {
       return Boolean(localStorage.getItem('eduplay_student_session'));
     }
-    return Boolean(localStorage.getItem('eduplay_teacher_email'));
+    const savedEmail = localStorage.getItem('eduplay_teacher_email');
+    return Boolean(savedEmail && savedEmail.includes('@'));
   } catch {
     return false;
   }
@@ -90,12 +88,13 @@ export function App() {
   const initialInIframe = ssoBootstrap.inIframe;
   const initialStoredSso = ssoBootstrap.storedSession;
 
-  // Bypass login immediately if URL has SSO params, embedded inside iframe, or saved SSO/active session exists
+  // Only bypass login screen if URL contains valid SSO params, or an authenticated session is already stored
   const [showPortal, setShowPortal] = useState<boolean>(() => {
     if (ssoBootstrap.shouldBypassLogin) return false;
     return !checkHasSavedSession();
   });
-  const [isSsoAuthenticating, setIsSsoAuthenticating] = useState<boolean>(false);
+  // Show loading spinner while verifying initial URL SSO token/email before rendering dashboard
+  const [isSsoAuthenticating, setIsSsoAuthenticating] = useState<boolean>(() => Boolean(initialSsoHint));
 
   const [activeModule, setActiveModule] = useState<ModuleType>(() => {
     if (initialSsoHint) {
@@ -107,49 +106,47 @@ export function App() {
         if (savedModule) {
           return sanitizeTeacherModule(savedModule);
         }
-        if (initialInIframe || initialStoredSso) {
-          return 'assignment';
+        if (initialStoredSso) {
+          return sanitizeTeacherModule(initialStoredSso.targetModule || 'assignment');
         }
         const savedRole = localStorage.getItem('eduplay_active_role');
         if (savedRole === 'student') return 'assignment';
-      } catch {
-        if (initialInIframe) return 'assignment';
-      }
+      } catch {}
     }
     return 'lesson_5e';
   });
 
   const [userRole, setUserRole] = useState<UserRole>(() => {
     if (initialSsoHint) {
-      return initialSsoHint.role === 'admin' ? 'admin' : 'teacher';
+      return initialSsoHint.role?.toLowerCase().includes('admin') ? 'admin' : 'teacher';
     }
     if (initialStoredSso?.role) {
       return initialStoredSso.role;
     }
-    if (typeof window === 'undefined') return initialInIframe ? 'admin' : 'teacher';
+    if (typeof window === 'undefined') return 'teacher';
     try {
+      const isActive = localStorage.getItem('eduplay_active_session') === 'true';
       const savedRole = localStorage.getItem('eduplay_active_role');
-      if (savedRole === 'student' || savedRole === 'teacher' || savedRole === 'admin') {
+      if (isActive && (savedRole === 'student' || savedRole === 'teacher' || savedRole === 'admin')) {
         return savedRole;
       }
-    } catch {
-      return initialInIframe ? 'admin' : 'teacher';
-    }
-    return initialInIframe ? 'admin' : 'teacher';
+    } catch {}
+    return 'teacher';
   });
   const [gameInitialTab, setGameInitialTab] = useState<'games' | 'store'>('games');
 
-  // Teacher Session State (populated cleanly from SSO, iframe, localStorage, or Portal login)
+  // Teacher Session State (populated strictly from verified SSO, saved session, or Portal login; NEVER a default account)
   const [teacherEmail, setTeacherEmail] = useState<string>(() => {
     if (initialSsoHint?.email) return initialSsoHint.email;
     if (initialStoredSso?.email) return initialStoredSso.email;
     if (typeof window !== 'undefined') {
       try {
+        const isActive = localStorage.getItem('eduplay_active_session') === 'true';
         const savedEmail = localStorage.getItem('eduplay_teacher_email');
-        if (savedEmail && savedEmail.trim()) return savedEmail;
+        if (isActive && savedEmail && savedEmail.trim()) return savedEmail.trim().toLowerCase();
       } catch {}
     }
-    return DEFAULT_TEACHER_EMAIL;
+    return '';
   });
   const [teacherName, setTeacherName] = useState<string>(() => {
     if (initialSsoHint?.email) {
@@ -160,12 +157,15 @@ export function App() {
     }
     if (typeof window !== 'undefined') {
       try {
-        const email = localStorage.getItem('eduplay_teacher_email') || DEFAULT_TEACHER_EMAIL;
+        const isActive = localStorage.getItem('eduplay_active_session') === 'true';
+        const email = localStorage.getItem('eduplay_teacher_email') || '';
         const saved = localStorage.getItem('eduplay_teacher_name');
-        return resolveTeacherNameByEmail(email, saved, undefined, 'admin');
+        if (isActive && email.trim()) {
+          return resolveTeacherNameByEmail(email, saved, undefined, 'teacher');
+        }
       } catch {}
     }
-    return 'Nguyễn Thị Thu';
+    return '';
   });
 
   // Grade 3 Class & Student Session State
@@ -181,13 +181,10 @@ export function App() {
   const [currentStudent, setCurrentStudent] = useState<StudentRecord | null>(() => {
     if (typeof window === 'undefined') return null;
     try {
+      const isActive = localStorage.getItem('eduplay_active_session') === 'true';
+      if (!isActive) return null;
       const saved = localStorage.getItem('eduplay_student_session');
       if (saved) return JSON.parse(saved);
-      const cls = localStorage.getItem('eduplay_current_class') || 'Lớp 3C';
-      const roster = getStudentsFromLocalStorage(cls);
-      if (roster && roster.length > 0) {
-        return roster[0];
-      }
     } catch {
       return null;
     }
@@ -394,7 +391,11 @@ export function App() {
         } else {
           await clearAllAuthSessions();
           if (isMounted) {
-            setShowPortal(!initialInIframe);
+            setTeacherEmail('');
+            setTeacherName('');
+            setCurrentStudent(null);
+            setUserRole('teacher');
+            setShowPortal(true);
             setToastNotification({
               id: Date.now(),
               title: 'Không thể tự động đăng nhập',
@@ -421,7 +422,12 @@ export function App() {
       } catch (err: any) {
         console.warn('SSO execution error:', err);
         stripSensitiveSsoParamsFromUrl();
-        if (isMounted && !initialInIframe) {
+        await clearAllAuthSessions();
+        if (isMounted) {
+          setTeacherEmail('');
+          setTeacherName('');
+          setCurrentStudent(null);
+          setUserRole('teacher');
           setShowPortal(true);
         }
       } finally {
@@ -429,38 +435,49 @@ export function App() {
       }
     };
 
-    // 1. Check URL query / hash parameters OR iframe embed on startup
+    // 1. Strict SSO startup check: ONLY authenticate when URL contains sso_token/sso_email OR verified stored SSO session exists
     if (initialSsoHint) {
       const parentWin = initialInIframe ? window.parent : null;
       applySsoPayload(initialSsoHint, {
         replyTarget: parentWin ? { win: parentWin, origin: '*' } : undefined,
         preserveActiveModuleIfNoParam: false
       });
-    } else if (initialInIframe || initialStoredSso) {
-      // Running inside parent iframe or reloading with saved SSO session: ensure localStorage persists immediately
-      const fallbackEmail = initialStoredSso?.email || teacherEmail || DEFAULT_TEACHER_EMAIL;
-      const fallbackName = initialStoredSso?.name || teacherName;
-      const fallbackRole = initialStoredSso?.role || (userRole === 'admin' ? 'admin' : 'teacher');
-      const savedMod = (() => {
+    } else if (initialStoredSso) {
+      (async () => {
         try {
-          return localStorage.getItem(ACTIVE_MODULE_KEY) || undefined;
+          const check = await verifyTeacherAuthorization(initialStoredSso.email);
+          if (!isMounted) return;
+          if (!check.authorized || !check.profile) {
+            await clearAllAuthSessions();
+            if (isMounted) {
+              setTeacherEmail('');
+              setTeacherName('');
+              setCurrentStudent(null);
+              setUserRole('teacher');
+              setShowPortal(true);
+            }
+          } else {
+            const resolvedName =
+              check.profile.name ||
+              resolveTeacherNameByEmail(initialStoredSso.email, initialStoredSso.name || null, undefined, check.profile.userRole);
+            const resolvedRole: UserRole =
+              check.profile.userRole === 'admin' || initialStoredSso.role === 'admin' ? 'admin' : 'teacher';
+            setTeacherEmail(initialStoredSso.email);
+            setTeacherName(resolvedName);
+            setUserRole(resolvedRole);
+            setShowPortal(false);
+          }
         } catch {
-          return undefined;
+          await clearAllAuthSessions();
+          if (isMounted) {
+            setTeacherEmail('');
+            setTeacherName('');
+            setCurrentStudent(null);
+            setUserRole('teacher');
+            setShowPortal(true);
+          }
         }
       })();
-      applySsoPayload(
-        {
-          email: fallbackEmail,
-          name: fallbackName,
-          role: fallbackRole,
-          autologin: true,
-          module: savedMod || 'assignment'
-        },
-        {
-          preserveActiveModuleIfNoParam: true,
-          silentToast: true
-        }
-      );
     }
 
     let receivedParentSso = false;
@@ -669,7 +686,7 @@ export function App() {
     setUserAccounts((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const handleSelectPortal = (
+  const handleSelectPortal = async (
     role: UserRole,
     grade?: string,
     selectedClass?: string,
@@ -679,6 +696,8 @@ export function App() {
       localStorage.setItem('eduplay_active_session', 'true');
       localStorage.setItem('eduplay_active_role', role);
       localStorage.removeItem('eduplay_sso_active');
+      sessionStorage.setItem('eduplay_active_session', 'true');
+      sessionStorage.setItem('eduplay_active_role', role);
 
       setUserRole(role);
       setCurrentGrade(grade || 'Khối 3');
@@ -698,30 +717,83 @@ export function App() {
         }
         setActiveModule('assignment');
       } else {
-        const email = (userDetails?.email || teacherEmail || DEFAULT_TEACHER_EMAIL).trim().toLowerCase();
+        const email = (userDetails?.email || teacherEmail || '').trim().toLowerCase();
+        if (!email) {
+          await clearAllAuthSessions();
+          setTeacherEmail('');
+          setTeacherName('');
+          setShowPortal(true);
+          return;
+        }
         const name = resolveTeacherNameByEmail(email, userDetails?.name || null, undefined, role);
         setTeacherEmail(email);
         setTeacherName(name);
         localStorage.setItem('eduplay_teacher_email', email);
         localStorage.setItem('eduplay_teacher_name', name);
+        sessionStorage.setItem('eduplay_teacher_email', email);
+        sessionStorage.setItem('eduplay_teacher_name', name);
         setActiveModule('lesson_5e');
       }
 
       setShowPortal(false);
     } catch (err) {
       console.warn('Lỗi khi chọn cổng đăng nhập:', err);
-      setShowPortal(false);
+      setShowPortal(true);
     }
   };
 
   const handleLogout = async () => {
     await clearAllAuthSessions();
+    setTeacherEmail('');
+    setTeacherName('');
+    setCurrentStudent(null);
+    setUserRole('teacher');
     setShowPortal(true);
     setActiveModule('lesson_5e');
   };
 
-  const handleSwitchPortalMode = (targetRole: UserRole, targetClass?: string) => {
+  const handleSwitchPortalMode = async (targetRole: UserRole, targetClass?: string) => {
     const effectiveClass = targetClass || currentClass || 'Lớp 3C';
+    if (targetRole !== 'student') {
+      const storedEmail = (() => {
+        try {
+          return (
+            localStorage.getItem('eduplay_teacher_email') ||
+            sessionStorage.getItem('eduplay_teacher_email') ||
+            ''
+          )
+            .trim()
+            .toLowerCase();
+        } catch {
+          return '';
+        }
+      })();
+      const email = (teacherEmail || storedEmail).trim().toLowerCase();
+      if (!email) {
+        await clearAllAuthSessions();
+        setTeacherEmail('');
+        setTeacherName('');
+        setCurrentStudent(null);
+        setUserRole('teacher');
+        setShowPortal(true);
+        return;
+      }
+      const name = resolveTeacherNameByEmail(email, null, undefined, targetRole);
+      setTeacherEmail(email);
+      setTeacherName(name);
+      localStorage.setItem('eduplay_teacher_email', email);
+      localStorage.setItem('eduplay_teacher_name', name);
+      setUserRole(targetRole);
+      setCurrentGrade('Khối 3');
+      setCurrentClass(effectiveClass);
+      try {
+        localStorage.setItem('eduplay_active_session', 'true');
+        localStorage.setItem('eduplay_active_role', targetRole);
+      } catch {}
+      setActiveModule('lesson_5e');
+      return;
+    }
+
     setUserRole(targetRole);
     setCurrentGrade('Khối 3');
     setCurrentClass(effectiveClass);
@@ -730,46 +802,37 @@ export function App() {
       localStorage.setItem('eduplay_active_role', targetRole);
     } catch {}
 
-    if (targetRole === 'student') {
-      const roster = getStudentsFromLocalStorage(effectiveClass);
-      const existingMatchesClass =
-        currentStudent &&
-        (currentStudent.className || '').replace(/^Lớp\s*/i, '').trim().toUpperCase() ===
-          effectiveClass.replace(/^Lớp\s*/i, '').trim().toUpperCase();
+    const roster = getStudentsFromLocalStorage(effectiveClass);
+    const existingMatchesClass =
+      currentStudent &&
+      (currentStudent.className || '').replace(/^Lớp\s*/i, '').trim().toUpperCase() ===
+        effectiveClass.replace(/^Lớp\s*/i, '').trim().toUpperCase();
 
-      const stObj: StudentRecord =
-        (existingMatchesClass && !targetClass ? currentStudent : roster?.[0]) || {
-          id: `st-${effectiveClass.replace(/^Lớp\s*/i, '').toLowerCase()}-1`,
-          stt: 1,
-          code: `${effectiveClass.replace(/^Lớp\s*/i, '').toUpperCase()}26-27-1`,
-          sddcn: '038316001001',
-          name: `Học sinh ${effectiveClass}`,
-          fullName: `Học sinh ${effectiveClass}`,
-          gender: 'Nam',
-          dob: '15/05/2017',
-          className: effectiveClass,
-          parentName: 'Phụ huynh',
-          phone: '0985608063',
-          email: `hs.${effectiveClass.replace(/^Lớp\s*/i, '').toLowerCase()}1@quanghungpk1.edu.vn`,
-          status: 'active',
-          conduct: 'Tốt',
-          avgScore: 9.0,
-          avatar: '🐰',
-          coins: 1000
-        };
-      setCurrentStudent(stObj);
-      localStorage.setItem('eduplay_student_session', JSON.stringify(stObj));
-      localStorage.setItem('eduplay_current_class', effectiveClass);
-      localStorage.setItem('eduplay_active_class', effectiveClass);
-      window.dispatchEvent(new CustomEvent('eduplay_student_session_updated', { detail: { student: stObj } }));
-    } else {
-      const email = localStorage.getItem('eduplay_teacher_email') || DEFAULT_TEACHER_EMAIL;
-      const name = resolveTeacherNameByEmail(email, null, undefined, 'admin');
-      setTeacherEmail(email);
-      setTeacherName(name);
-      localStorage.setItem('eduplay_teacher_email', email);
-      localStorage.setItem('eduplay_teacher_name', name);
-    }
+    const stObj: StudentRecord =
+      (existingMatchesClass && !targetClass ? currentStudent : roster?.[0]) || {
+        id: `st-${effectiveClass.replace(/^Lớp\s*/i, '').toLowerCase()}-1`,
+        stt: 1,
+        code: `${effectiveClass.replace(/^Lớp\s*/i, '').toUpperCase()}26-27-1`,
+        sddcn: '038316001001',
+        name: `Học sinh ${effectiveClass}`,
+        fullName: `Học sinh ${effectiveClass}`,
+        gender: 'Nam',
+        dob: '15/05/2017',
+        className: effectiveClass,
+        parentName: 'Phụ huynh',
+        phone: '0985608063',
+        email: `hs.${effectiveClass.replace(/^Lớp\s*/i, '').toLowerCase()}1@quanghungpk1.edu.vn`,
+        status: 'active',
+        conduct: 'Tốt',
+        avgScore: 9.0,
+        avatar: '🐰',
+        coins: 1000
+      };
+    setCurrentStudent(stObj);
+    localStorage.setItem('eduplay_student_session', JSON.stringify(stObj));
+    localStorage.setItem('eduplay_current_class', effectiveClass);
+    localStorage.setItem('eduplay_active_class', effectiveClass);
+    window.dispatchEvent(new CustomEvent('eduplay_student_session_updated', { detail: { student: stObj } }));
 
     setActiveModule('lesson_5e');
   };
