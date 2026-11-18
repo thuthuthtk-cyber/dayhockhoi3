@@ -243,17 +243,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
     propTeacherEmail ||
     firebaseUser?.email ||
     storedTeacherEmail ||
-    'thuthuthtk@gmail.com';
+    '';
 
-  const teacherProfile = getCurrentTeacherProfile(effectiveTeacherEmail);
-  const effectiveTeacherRole = teacherProfile.userRole;
+  const teacherProfile = effectiveTeacherEmail ? getCurrentTeacherProfile(effectiveTeacherEmail) : null;
+  const effectiveTeacherRole = teacherProfile?.userRole || (userRole === 'admin' ? 'admin' : 'teacher');
 
-  const effectiveTeacherName = resolveTeacherNameByEmail(
-    effectiveTeacherEmail,
-    firebaseUser?.displayName || null,
-    teachersList,
-    userRole === 'admin' || effectiveTeacherRole === 'admin' ? 'admin' : 'teacher'
-  );
+  const effectiveTeacherName = effectiveTeacherEmail
+    ? resolveTeacherNameByEmail(
+        effectiveTeacherEmail,
+        firebaseUser?.displayName || propTeacherName || storedTeacherName || null,
+        teachersList,
+        userRole === 'admin' || effectiveTeacherRole === 'admin' ? 'admin' : 'teacher'
+      )
+    : propTeacherName || storedTeacherName || 'Giáo viên';
 
   const [teacherAvatarImgError, setTeacherAvatarImgError] = useState(false);
 
