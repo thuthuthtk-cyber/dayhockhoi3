@@ -4,6 +4,7 @@ import { getStudentAssignedSubjects, isSubjectMatch } from './studentSessionServ
 import { getCurrentActiveAcademicYear, getStudentClassInfo } from './studentStorageService';
 import { normalizeStudentCode, isValidStudentCode, getRecordType } from './studentCode';
 import { formatScore, roundTotalScore, formatTotalScore, getCurrentSubmissionTimestamp, formatSubmissionDateTime } from '../utils/scoreUtils';
+import { formatDateTimeVN } from '../utils/dateTimeUtils';
 import { db } from './firebase';
 import { query, collection, where, getDocs } from 'firebase/firestore';
 
@@ -692,7 +693,7 @@ export function getStudentHomeworkSubmissions(
       subject: normalizeSubjectName(sub.subject || asObj?.subject || 'Toán'),
       score: Math.min(10, Math.max(0, isNaN(numScore) ? 10 : numScore)),
       rawScore,
-      dueDate: asObj?.dueDate || 'Sớm nhất',
+      dueDate: formatDateTimeVN(asObj?.dueDate, 'Không giới hạn'),
       submittedTime: sub.submittedTime || sub.submittedAt || new Date().toISOString(),
       title: sub.title || asObj?.title || 'Bài tập tự luyện'
     });

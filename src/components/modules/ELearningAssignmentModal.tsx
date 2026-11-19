@@ -21,6 +21,8 @@ import {
 import { DateTimePicker } from '../common/DateTimePicker';
 import { db } from '../../services/firebase';
 import { collection, onSnapshot } from 'firebase/firestore';
+import { AlertCircle } from 'lucide-react';
+import { parseFirestoreDate, toIsoDateTimeString } from '../../utils/dateTimeUtils';
 
 interface ClassItem {
   id: string;
@@ -126,12 +128,13 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
 
   // Step 2: Settings
   const [title, setTitle] = useState<string>('');
-  const [startDate, setStartDate] = useState<string>('09/03/2026 03:31 AM');
-  const [dueDate, setDueDate] = useState<string>('10/30/2026 11:59 PM');
-  const [isUnlimited, setIsUnlimited] = useState<boolean>(false);
+  const [startDate, setStartDate] = useState<string>(() => toIsoDateTimeString(new Date()));
+  const [dueDate, setDueDate] = useState<string>('');
+  const [isUnlimited, setIsUnlimited] = useState<boolean>(true);
   const [allowRetake, setAllowRetake] = useState<boolean>(true);
   const [requireInteractiveVideo, setRequireInteractiveVideo] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const isSubmittingRef = React.useRef(false);
 
   // Realtime subscription to Firestore 'classes' collection
@@ -201,16 +204,18 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
       setCurrentStep(1);
       setTitle(`E-Learning: ${lesson.title}`);
       setAssignedMode('all');
-      setIsUnlimited(false);
+      setIsUnlimited(true);
       setAllowRetake(true);
       setRequireInteractiveVideo(true);
       setSelectedClasses([]);
+      setSubmitError(null);
 
       const now = new Date();
-      const pad = (n: number) => n.toString().padStart(2, '0');
-      const startStr = `${pad(now.getMonth() + 1)}/${pad(now.getDate())}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())} ${now.getHours() >= 12 ? 'PM' : 'AM'}`;
-      setStartDate(startStr);
-      setDueDate('10/30/2026 11:59 PM');
+      setStartDate(toIsoDateTimeString(now));
+      const plus7 = new Date(now);
+      plus7.setDate(plus7.getDate() + 7);
+      plus7.setHours(23, 59, 0, 0);
+      setDueDate(toIsoDateTimeString(plus7));
     }
   }, [lesson, isOpen]);
 
@@ -218,17 +223,40 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
 
   const handleConfirmAssignment = async () => {
     if (isSubmittingRef.current || isSubmitting) return;
+    setSubmitError(null);
 
     const uniqueSelectedClasses = Array.from(new Set(selectedClasses.map(c => c.trim()).filter(Boolean)));
     if (uniqueSelectedClasses.length === 0) {
-      alert('Vui lòng chọn ít nhất 1 lớp học để giao bài tập E-Learning!');
+      setSubmitError('Vui lòng quay lại Bước 1 và chọn ít nhất 1 lớp học để giao bài E-Learning!');
       return;
+    }
+
+    const startDateObj = parseFirestoreDate(startDate) || new Date();
+    const startIso = toIsoDateTimeString(startDateObj);
+    let dueIso = '';
+
+    if (!isUnlimited) {
+      const dueDateObj = parseFirestoreDate(dueDate, { defaultEndOfDay: true });
+      if (!dueDateObj) {
+        setSubmitError('Vui lòng chọn hạn nộp bài hợp lệ hoặc bật "Không giới hạn thời gian"!');
+        return;
+      }
+      if (dueDateObj.getTime() <= startDateObj.getTime()) {
+        setSubmitError('Hạn nộp bài phải lớn hơn thời điểm mở bài!');
+        return;
+      }
+      if (dueDateObj.getTime() <= Date.now()) {
+        setSubmitError('Hạn nộp bài phải ở tương lai (sau thời điểm hiện tại)!');
+        return;
+      }
+      dueIso = toIsoDateTimeString(dueDateObj);
     }
 
     try {
       isSubmittingRef.current = true;
       setIsSubmitting(true);
       const rootId = `elearn-${Date.now()}`;
+      const assignedAtIso = toIsoDateTimeString(new Date());
 
       for (let i = 0; i < uniqueSelectedClasses.length; i++) {
         const cls = uniqueSelectedClasses[i];
@@ -246,12 +274,12 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
           grade: lesson.grade,
           targetClass: cls, // Lưu độc lập duy nhất 1 lớp cho từng bản ghi
           assignedTo: assignedMode,
-          startDate,
-          dueDate: isUnlimited ? 'Vô thời hạn' : dueDate,
+          startDate: startIso,
+          dueDate: isUnlimited ? '' : dueIso,
           isUnlimited,
           allowRetake,
           requireInteractiveVideo,
-          assignedAt: new Date().toLocaleDateString('vi-VN'),
+          assignedAt: assignedAtIso,
           assignedBy: lesson.authorName || 'Thầy/Cô Giáo',
           lessonData: lesson,
           type: 'elearning',
@@ -269,7 +297,7 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
       onClose();
     } catch (err) {
       console.error('Error assigning elearning lesson:', err);
-      alert('Có lỗi xảy ra khi giao bài. Vui lòng thử lại!');
+      setSubmitError('Có lỗi xảy ra khi lưu bài giao lên máy chủ. Vui lòng thử lại!');
     } finally {
       isSubmittingRef.current = false;
       setIsSubmitting(false);
@@ -535,23 +563,33 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
 
               {/* THỜI ĐIỂM MỞ ĐỀ & HẠN NỘP BÀI */}
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <div className="grid grid-cols-2 gap-4 flex-1">
                     <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
-                      THỜI ĐIỂM MỞ ĐỀ
+                      THỜI ĐIỂM MỞ BÀI
                     </span>
                     <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
                       HẠN NỘP BÀI
                     </span>
                   </div>
-                  <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-slate-700 select-none">
+                  <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-emerald-700 select-none">
                     <input
                       type="checkbox"
                       checked={isUnlimited}
-                      onChange={(e) => setIsUnlimited(e.target.checked)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setIsUnlimited(checked);
+                        setSubmitError(null);
+                        if (!checked && !dueDate) {
+                          const d = new Date();
+                          d.setDate(d.getDate() + 7);
+                          d.setHours(23, 59, 0, 0);
+                          setDueDate(toIsoDateTimeString(d));
+                        }
+                      }}
                       className="rounded text-[#00875A] focus:ring-[#00875A] w-3.5 h-3.5"
                     />
-                    <span>VÔ THỜI HẠN</span>
+                    <span>Không giới hạn thời gian</span>
                   </label>
                 </div>
 
@@ -561,7 +599,10 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
                     <label className="text-[11px] font-bold text-slate-500 uppercase">Thời điểm mở bài</label>
                     <DateTimePicker
                       value={startDate}
-                      onChange={setStartDate}
+                      onChange={(val) => {
+                        setStartDate(val);
+                        setSubmitError(null);
+                      }}
                       placeholder="DD/MM/YYYY HH:mm"
                     />
                   </div>
@@ -571,12 +612,22 @@ export const ELearningAssignmentModal: React.FC<ELearningAssignmentModalProps> =
                     <label className="text-[11px] font-bold text-slate-500 uppercase">Hạn nộp bài</label>
                     <DateTimePicker
                       disabled={isUnlimited}
-                      value={isUnlimited ? 'Vô thời hạn' : dueDate}
-                      onChange={setDueDate}
-                      placeholder="DD/MM/YYYY HH:mm"
+                      value={isUnlimited ? '' : dueDate}
+                      onChange={(val) => {
+                        setDueDate(val);
+                        setSubmitError(null);
+                      }}
+                      placeholder={isUnlimited ? 'Không giới hạn thời gian' : 'DD/MM/YYYY HH:mm'}
                     />
                   </div>
                 </div>
+
+                {submitError && (
+                  <div className="mt-2 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{submitError}</span>
+                  </div>
+                )}
               </div>
 
               {/* TÙY CHỌN BỔ SUNG */}

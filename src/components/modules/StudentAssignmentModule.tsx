@@ -9,8 +9,12 @@ import {
   Sparkles, 
   Eye, 
   Check, 
-  BookMarked
+  BookMarked,
+  Calendar,
+  AlertCircle,
+  Lock
 } from 'lucide-react';
+import { formatDateTimeVN, getScheduleStatus, parseFirestoreDate } from '../../utils/dateTimeUtils';
 import { StatsSummaryRow } from '../common/StatsSummaryRow';
 import { StudentRewardBadgeCard } from '../common/StudentRewardBadgeCard';
 // import { HistoryErrorBoundary } from '../common/HistoryErrorBoundary';
@@ -120,8 +124,8 @@ export const deduplicateAssignmentSubmissions = (subs: AssignmentSubmissionItem[
       map.set(key, sub);
     } else {
       // Keep preferred submission (latest or valid score)
-      const existingTime = new Date(existing.submittedTime || 0).getTime();
-      const subTime = new Date(sub.submittedTime || 0).getTime();
+      const existingTime = parseFirestoreDate(existing.submittedTime, { silent: true })?.getTime() || 0;
+      const subTime = parseFirestoreDate(sub.submittedTime, { silent: true })?.getTime() || 0;
       const preferred = (!isNaN(subTime) && !isNaN(existingTime) && subTime >= existingTime && sub.score !== '-') 
         ? sub 
         : (existing.score !== '-' ? existing : sub);
@@ -720,9 +724,9 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
     });
     const deduplicated = deduplicateAssignmentSubmissions(list);
     return deduplicated.sort((a, b) => {
-      const timeA = new Date(a.submittedTime || 0).getTime();
-      const timeB = new Date(b.submittedTime || 0).getTime();
-      return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+      const timeA = parseFirestoreDate(a.submittedTime, { silent: true })?.getTime() || 0;
+      const timeB = parseFirestoreDate(b.submittedTime, { silent: true })?.getTime() || 0;
+      return timeB - timeA;
     });
   }, [assignmentHistory]);
 
@@ -1080,18 +1084,24 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
                 const maxAllowed = getMaxAllowedAttempts(as);
                 const isMaxReached = attemptCount >= maxAllowed;
 
-                const isExpired = (() => {
-                  if (!as.dueDate) return false;
-                  try {
-                    const end = new Date(as.dueDate);
-                    if (!isNaN(end.getTime())) {
-                      return new Date().getTime() > end.getTime();
-                    }
-                  } catch {}
-                  return false;
-                })();
+                const schedule = getScheduleStatus({
+                  startTime: as.startDate || (as as any).startTime,
+                  dueDate: as.dueDate,
+                  isUnlimited: (as as any).isUnlimited,
+                  isDone,
+                });
 
-                const isDisabled = (isExpired && !isDone) || isMaxReached;
+                const openDisplay = formatDateTimeVN(
+                  as.startDate || (as as any).startTime || as.assignedDate || as.createdAt,
+                  'Mở ngay'
+                );
+                const deadlineDisplay = schedule.isUnlimited
+                  ? 'Không giới hạn thời gian'
+                  : schedule.hadInvalidDueDate
+                    ? 'Chưa rõ hạn (Đang mở)'
+                    : formatDateTimeVN(as.dueDate, 'Không giới hạn thời gian');
+
+                const isDisabled = ((schedule.isExpired || schedule.isUpcoming) && !isDone) || isMaxReached;
 
                 return (
                 <div 
@@ -1102,7 +1112,7 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
 
                   <div className="space-y-3 relative z-10">
                     {/* Tags */}
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
                       <div className="flex items-center gap-2">
                         <span className={`text-[11px] font-extrabold px-3 py-1 rounded-full uppercase ${subjColor.badgeClass}`}>
                           {as.subject || subjColor.name}
@@ -1111,24 +1121,37 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
                           {as.grade || 'Khối 3'}
                         </span>
                       </div>
-                      {isDone ? (
-                        <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs border ${
-                          isMaxReached && maxAllowed === 1 
-                            ? 'bg-rose-100 text-rose-800 border-rose-200' 
-                            : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                        }`}>
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" /> 
-                          {isMaxReached ? `Đã hoàn thành (${attemptCount}/${maxAllowed} lần - Khóa)` : `Đã hoàn thành (${existingSub?.score})`}
-                        </span>
-                      ) : isExpired ? (
-                        <span className="bg-rose-100 text-rose-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs border border-rose-200">
-                          🔒 Đã hết hạn
-                        </span>
-                      ) : (
-                        <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs border border-amber-200">
-                          <Clock className="w-3 h-3 text-amber-600" /> Đang chờ làm
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {isDone ? (
+                          <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs border ${
+                            isMaxReached && maxAllowed === 1 
+                              ? 'bg-rose-100 text-rose-800 border-rose-200' 
+                              : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          }`}>
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> 
+                            {isMaxReached ? `Đã hoàn thành (${attemptCount}/${maxAllowed} lần - Khóa)` : `Đã hoàn thành (${existingSub?.score})`}
+                          </span>
+                        ) : schedule.isUpcoming ? (
+                          <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs border border-amber-200">
+                            <Lock className="w-3 h-3 text-amber-600" /> Chưa mở
+                          </span>
+                        ) : schedule.isExpired ? (
+                          <span className="bg-rose-100 text-rose-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs border border-rose-200">
+                            🔒 Đã hết hạn
+                          </span>
+                        ) : (
+                          <>
+                            <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs border border-emerald-200">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Đang mở
+                            </span>
+                            {schedule.isNearDeadline && schedule.countdownText && (
+                              <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 border border-amber-300">
+                                ⏰ {schedule.countdownText}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
 
                     {/* Title */}
@@ -1136,11 +1159,39 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
                       {as.title}
                     </h3>
 
-                    {/* Meta info */}
-                    <div className="pt-1.5 text-xs text-slate-600">
-                      <div className="bg-slate-50 p-2.5 sm:p-3 rounded-xl border border-slate-100 flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-emerald-600" />
-                        <span>Số câu: <b>{as.questions?.length || 5} câu</b></span>
+                    {/* Meta info: Số câu + Mở + Hạn */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-xs text-slate-600">
+                      <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span className="truncate">Số câu: <b>{as.questions?.length || 5} câu</b></span>
+                      </div>
+                      <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex items-center gap-2">
+                        <Calendar className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span className="truncate">Mở: <b>{openDisplay}</b></span>
+                      </div>
+                      <div className={`p-2.5 rounded-xl border flex items-center gap-2 ${
+                        schedule.isExpired && !isDone
+                          ? 'bg-rose-50 border-rose-100 text-rose-700'
+                          : schedule.isNearDeadline && !isDone
+                            ? 'bg-amber-50 border-amber-200 text-amber-800'
+                            : schedule.isUnlimited
+                              ? 'bg-emerald-50/70 border-emerald-100 text-emerald-800'
+                              : 'bg-slate-50 border-slate-100 text-slate-700'
+                      }`}>
+                        <AlertCircle className={`w-4 h-4 shrink-0 ${
+                          schedule.isExpired && !isDone
+                            ? 'text-rose-500'
+                            : schedule.isNearDeadline && !isDone
+                              ? 'text-amber-600'
+                              : 'text-indigo-500'
+                        }`} />
+                        <span className="truncate">
+                          {schedule.isUnlimited ? (
+                            <b>Không giới hạn thời gian</b>
+                          ) : (
+                            <>Hạn: <b>{deadlineDisplay}</b></>
+                          )}
+                        </span>
                       </div>
                     </div>
 
@@ -1200,7 +1251,13 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
                         }`}
                       >
                         <span>
-                          {isExpired ? '🔒 Đã hết hạn làm bài' : '⚡ Bắt đầu làm bài tập'}
+                          {schedule.isUpcoming
+                            ? '⏳ Chưa đến giờ mở bài'
+                            : schedule.isExpired
+                              ? '🔒 Đã hết hạn làm bài'
+                              : isMaxReached
+                                ? '🔒 Đã hết lượt làm bài'
+                                : '⚡ Bắt đầu làm bài tập'}
                         </span>
                         {!isDisabled && <ChevronRight className="w-4 h-4" />}
                       </button>

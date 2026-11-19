@@ -18,8 +18,10 @@ import {
   CheckCircle,
   AlertCircle,
   Eye,
-  RotateCcw
+  RotateCcw,
+  Lock
 } from 'lucide-react';
+import { formatDateTimeVN, getScheduleStatus } from '../../utils/dateTimeUtils';
 import { StatsSummaryRow } from '../common/StatsSummaryRow';
 import { Lesson5EPlan, Lesson5EStep } from '../../types';
 import { InteractiveVideoPlayer } from './InteractiveVideoPlayer';
@@ -1010,7 +1012,17 @@ export const StudentELearning: React.FC<StudentELearningProps> = ({
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 pt-2">
-            {filteredDisplayItems.map((item) => (
+            {filteredDisplayItems.map((item) => {
+              const schedule = getScheduleStatus({
+                startTime: item.assignment.startDate || item.assignment.assignedAt,
+                dueDate: item.assignment.dueDate,
+                isUnlimited: item.assignment.isUnlimited,
+                isDone: item.status === 'completed',
+              });
+              const isLockedBySchedule =
+                schedule.isUpcoming || (schedule.isExpired && item.status !== 'completed');
+
+              return (
               <div
                 key={item.assignment.id}
                 id={`elearn-card-${item.assignment.id}`}
@@ -1054,14 +1066,24 @@ export const StudentELearning: React.FC<StudentELearningProps> = ({
                           <span>Cần cố gắng {item.avgQuizScore !== null ? `(${item.avgQuizScore}đ)` : ''}</span>
                         </span>
                       )
+                    ) : schedule.isUpcoming ? (
+                      <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+                        <Lock className="w-3 h-3 text-indigo-500" />
+                        <span>Chưa mở</span>
+                      </span>
+                    ) : schedule.isExpired ? (
+                      <span className="bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+                        <Lock className="w-3 h-3 text-rose-500" />
+                        <span>Đã hết hạn</span>
+                      </span>
                     ) : item.status === 'in_progress' ? (
                       <span className="bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full flex items-center gap-1 shrink-0">
                         <Clock className="w-3 h-3 text-amber-600" />
-                        <span>Chưa hoàn thành ({item.progressPct}%)</span>
+                        <span>Đang mở ({item.progressPct}%)</span>
                       </span>
                     ) : (
-                      <span className="bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full flex items-center gap-1 shrink-0">
-                        <span>⏳ Chưa hoàn thành</span>
+                      <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+                        <span>Đang mở</span>
                       </span>
                     )}
                   </div>
@@ -1078,9 +1100,26 @@ export const StudentELearning: React.FC<StudentELearningProps> = ({
 
                   {/* Deadline & Author metadata */}
                   <div className="mt-4 space-y-1.5 pt-3 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
-                    <div className="flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span>Hạn nộp: <strong className="text-slate-700">{item.assignment.dueDate}</strong></span>
+                    {schedule.startText && (
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                        <span>
+                          Mở: <strong className="text-slate-700">{formatDateTimeVN(schedule.startDate, '-')}</strong>
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <Clock className={`w-3.5 h-3.5 shrink-0 ${schedule.isExpired ? 'text-rose-500' : schedule.isNearDeadline ? 'text-amber-500' : 'text-slate-400'}`} />
+                        <span className={schedule.isExpired ? 'text-rose-600 font-bold' : ''}>
+                          <strong className={schedule.isExpired ? 'text-rose-700' : 'text-slate-700'}>{schedule.deadlineText}</strong>
+                        </span>
+                      </div>
+                      {schedule.countdownText && (
+                        <span className="text-[10px] font-extrabold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                          ⏰ {schedule.countdownText}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5">
                       <span className="text-slate-400">👤</span>
@@ -1143,22 +1182,45 @@ export const StudentELearning: React.FC<StudentELearningProps> = ({
 
                       <button
                         type="button"
+                        disabled={isLockedBySchedule}
                         onClick={() => {
+                          if (isLockedBySchedule) return;
                           setIsReviewMode(false);
                           setSelectedLesson(item.lesson);
                           setActiveStepTab(getInitialLessonStep(item.lesson));
                         }}
-                        className="flex-1 py-2.5 px-3 rounded-xl text-xs font-black text-white bg-[#00875A] hover:bg-[#00704A] transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-98"
+                        className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition-all shadow-xs flex items-center justify-center gap-1.5 ${
+                          isLockedBySchedule
+                            ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                            : 'text-white bg-[#00875A] hover:bg-[#00704A] cursor-pointer active:scale-98'
+                        }`}
                       >
-                        <Play className="w-3.5 h-3.5 fill-current" />
+                        {isLockedBySchedule ? <Lock className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
                         <span>
-                          {item.status === 'completed'
-                            ? 'Ôn tập lại'
-                            : 'Tiếp tục học'}
+                          {schedule.isUpcoming
+                            ? 'Chưa mở'
+                            : schedule.isExpired && item.status !== 'completed'
+                              ? 'Đã hết hạn'
+                              : item.status === 'completed'
+                                ? 'Ôn tập lại'
+                                : 'Tiếp tục học'}
                         </span>
-                        <ChevronRight className="w-3.5 h-3.5" />
+                        {!isLockedBySchedule && <ChevronRight className="w-3.5 h-3.5" />}
                       </button>
                     </div>
+                  ) : isLockedBySchedule ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-slate-500 bg-slate-100 border border-slate-200 flex items-center justify-center gap-2 cursor-not-allowed"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>
+                        {schedule.isUpcoming
+                          ? `Chưa mở (${formatDateTimeVN(schedule.startDate, '')})`
+                          : 'Đã hết hạn học bài'}
+                      </span>
+                    </button>
                   ) : (
                     <button
                       type="button"
@@ -1180,7 +1242,8 @@ export const StudentELearning: React.FC<StudentELearningProps> = ({
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

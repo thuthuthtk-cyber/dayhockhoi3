@@ -18,6 +18,8 @@ import { HomeworkAssignment, HomeworkSubmission, Question, SUBJECT_OPTIONS, CLAS
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, addDoc } from 'firebase/firestore';
+import { DateTimePicker } from './common/DateTimePicker';
+import { formatDateTimeVN, parseFirestoreDate, toIsoDateTimeString } from '../utils/dateTimeUtils';
 
 interface HomeworkManagerProps {
   homeworkAssignments: HomeworkAssignment[];
@@ -79,28 +81,49 @@ export const HomeworkManager: React.FC<HomeworkManagerProps> = ({
     title: 'Bài tập ôn tập Bảng nhân và chia',
     subject: 'Toán',
     grade: 'Khối 3',
-    className: 'Lớp 3A',
-    deadline: '2026-11-20T23:59',
+    className: 'Lớp 3C',
+    deadline: '',
+    isUnlimited: true,
     selectedQuestionIds: [] as string[]
   });
+  const [formError, setFormError] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   // Assign New Homework
   const handleAssignHomework = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     const selectedQuestions = questionBank.filter(q => hwForm.selectedQuestionIds.includes(q.id));
     
     if (selectedQuestions.length === 0) {
-      alert('Vui lòng chọn ít nhất 1 câu hỏi cho bài tập!');
+      setFormError('Vui lòng chọn ít nhất 1 câu hỏi cho bài tập!');
       return;
     }
 
+    if (!hwForm.isUnlimited) {
+      const parsedDue = parseFirestoreDate(hwForm.deadline);
+      if (!parsedDue) {
+        setFormError('Vui lòng chọn hạn nộp bài hợp lệ hoặc bật "Không giới hạn thời gian".');
+        return;
+      }
+      if (parsedDue.getTime() <= Date.now()) {
+        setFormError('Hạn nộp bài phải ở tương lai (sau thời điểm hiện tại).');
+        return;
+      }
+    }
+
+    const nowIso = toIsoDateTimeString(new Date());
     const newHw: HomeworkAssignment = {
       id: `hw_${Date.now()}`,
       title: hwForm.title,
       subject: hwForm.subject,
       grade: hwForm.grade,
       className: hwForm.className,
-      deadline: hwForm.deadline,
+      startDate: nowIso,
+      assignedDate: nowIso,
+      deadline: hwForm.isUnlimited ? '' : toIsoDateTimeString(hwForm.deadline),
+      dueDate: hwForm.isUnlimited ? '' : toIsoDateTimeString(hwForm.deadline),
+      isUnlimited: hwForm.isUnlimited,
       questions: selectedQuestions,
       status: 'active',
       createdBy: 'u_teacher1',
@@ -117,6 +140,7 @@ export const HomeworkManager: React.FC<HomeworkManagerProps> = ({
     setHomeworkAssignments(prev => [newHw, ...prev]);
     setSelectedHomework(newHw);
     setIsModalOpen(false);
+    setFormError(null);
     onActivityAdded(`Vừa giao bài tập mới "${hwForm.title}" cho ${hwForm.className}`);
   };
 
@@ -187,8 +211,9 @@ export const HomeworkManager: React.FC<HomeworkManagerProps> = ({
       } : s));
 
       onActivityAdded(`AI vừa đề xuất chấm bài cho học sinh ${sub.studentName}: ${data.score} điểm`);
+      setAiError(null);
     } catch (err: any) {
-      alert('Không thể chấm bằng AI: ' + err.message);
+      setAiError('Không thể chấm bằng AI: ' + (err?.message || 'Vui lòng thử lại sau.'));
     } finally {
       setIsAiGrading(false);
     }
@@ -257,7 +282,7 @@ export const HomeworkManager: React.FC<HomeworkManagerProps> = ({
 
                   <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
                     <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-slate-400" /> Hạn: {new Date(hw.deadline).toLocaleDateString('vi-VN')}
+                      <Clock className="w-3 h-3 text-slate-400" /> Hạn: {hw.isUnlimited ? 'Không giới hạn thời gian' : formatDateTimeVN(hw.dueDate || hw.deadline, 'Không giới hạn thời gian')}
                     </span>
                     <span className="font-bold text-emerald-600">Đã nộp: {subCount}</span>
                   </div>
@@ -269,6 +294,12 @@ export const HomeworkManager: React.FC<HomeworkManagerProps> = ({
 
         {/* Right Column: Homework Workspace (Teacher View or Student View) */}
         <div className="lg:col-span-8 bg-white rounded-2xl p-6 shadow-xs border border-slate-200/80 min-h-[600px]">
+          {aiError && (
+            <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2"><AlertCircle className="w-4 h-4 shrink-0" /> {aiError}</span>
+              <button type="button" onClick={() => setAiError(null)} className="text-rose-500 hover:text-rose-700 cursor-pointer"><X className="w-4 h-4" /></button>
+            </div>
+          )}
           {selectedHomework ? (
             <div className="space-y-6">
               {/* Top Banner */}
@@ -285,7 +316,11 @@ export const HomeworkManager: React.FC<HomeworkManagerProps> = ({
 
                 <div className="text-right text-xs text-indigo-100">
                   <p>Hạn nộp bài:</p>
-                  <p className="font-bold text-amber-300">{new Date(selectedHomework.deadline).toLocaleString('vi-VN')}</p>
+                  <p className="font-bold text-amber-300">
+                    {selectedHomework.isUnlimited
+                      ? 'Không giới hạn thời gian'
+                      : formatDateTimeVN(selectedHomework.dueDate || selectedHomework.deadline, 'Không giới hạn thời gian')}
+                  </p>
                 </div>
               </div>
 
@@ -391,7 +426,7 @@ export const HomeworkManager: React.FC<HomeworkManagerProps> = ({
                               </div>
                               <div>
                                 <h5 className="font-bold text-xs text-slate-900">{sub.studentName}</h5>
-                                <p className="text-[10px] text-slate-400">Nộp lúc: {new Date(sub.submittedAt).toLocaleTimeString('vi-VN')}</p>
+                                <p className="text-[10px] text-slate-400">Nộp lúc: {formatDateTimeVN(sub.submittedAt, sub.submittedAt || '-')}</p>
                               </div>
                             </div>
 
@@ -459,27 +494,51 @@ export const HomeworkManager: React.FC<HomeworkManagerProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Lớp được giao</label>
                   <select
                     value={hwForm.className}
                     onChange={(e) => setHwForm({ ...hwForm, className: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-medium"
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-medium"
                   >
                     {CLASS_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Hạn nộp bài</label>
-                  <input
-                    type="datetime-local"
-                    value={hwForm.deadline}
-                    onChange={(e) => setHwForm({ ...hwForm, deadline: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-medium"
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">Hạn nộp bài</label>
+                    <label className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={hwForm.isUnlimited}
+                        onChange={(e) => {
+                          setHwForm({ ...hwForm, isUnlimited: e.target.checked });
+                          setFormError(null);
+                        }}
+                        className="accent-emerald-600 rounded"
+                      />
+                      <span>Không giới hạn</span>
+                    </label>
+                  </div>
+                  <DateTimePicker
+                    disabled={hwForm.isUnlimited}
+                    value={hwForm.isUnlimited ? '' : hwForm.deadline}
+                    onChange={(val) => {
+                      setHwForm({ ...hwForm, deadline: val });
+                      setFormError(null);
+                    }}
+                    placeholder={hwForm.isUnlimited ? 'Không giới hạn thời gian' : 'DD/MM/YYYY HH:mm'}
                   />
                 </div>
               </div>
+
+              {formError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
 
               {/* Question Selection from Bank */}
               <div>

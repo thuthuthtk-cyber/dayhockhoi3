@@ -17,6 +17,7 @@ import { UseQuestionBankModal } from './components/modules/UseQuestionBankModal'
 import { GameRoomConfigModal } from './components/modules/GameRoomConfigModal';
 
 import { ModuleType, UserRole, Lesson5EPlan, HomeworkAssignment, QuestionItem, GameItem, UserAccount, StudentRecord } from './types';
+import { toIsoDateTimeString } from './utils/dateTimeUtils';
 import { INITIAL_USERS } from './services/mockData';
 import { db, auth } from './services/firebase';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
@@ -958,13 +959,18 @@ export function App() {
                     onBatchDeleteQuestions={handleBatchDeleteQuestions}
                     userRole={userRole}
                     onAssignHomework={(config) => {
+                      const nowIso = toIsoDateTimeString(new Date());
+                      const isUnlimited = Boolean(config.isUnlimited || !config.dueDate);
                       const newAssignment: HomeworkAssignment = {
                         id: `hw-bank-${Date.now()}`,
                         title: config.title,
                         subject: config.subject,
                         grade: config.grade,
                         targetClass: config.classes.join(', '),
-                        dueDate: config.dueDate,
+                        startDate: config.startDate || nowIso,
+                        assignedDate: nowIso,
+                        dueDate: isUnlimited ? '' : (config.dueDate || ''),
+                        isUnlimited,
                         description: `Bài tập tự luyện môn ${config.subject} gồm ${config.selectedQuestions.length} câu hỏi chuẩn sư phạm.`,
                         questions: config.selectedQuestions,
                         totalStudents: 35 * (config.classes.length || 1),

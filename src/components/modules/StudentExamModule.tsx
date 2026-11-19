@@ -28,6 +28,7 @@ import {
 import { StatsSummaryRow } from '../common/StatsSummaryRow';
 import { StudentRewardBadgeCard } from '../common/StudentRewardBadgeCard';
 import { getSubjectColorStyles } from '../../utils/subjectColors';
+import { formatDateTimeVN, getScheduleStatus, isUnlimitedDeadline, parseFirestoreDate } from '../../utils/dateTimeUtils';
 import { ExamPaper, QuestionItem } from '../../types';
 import { awardExamReward, awardAssignmentReward } from '../../config/rewardConfig';
 import { matchesQuestionType, isMultipleResponse, getCorrectOrderingSequence } from '../../lib/constants';
@@ -2043,74 +2044,20 @@ export const StudentExamModule: React.FC<StudentExamModuleProps> = ({
     console.groupEnd();
   }, [exams, filteredExamHistory, currentUserName, currentUserId, studentClass, studentGrade]);
 
-  // Helper parsing all date string formats (ISO, MM/DD/YYYY hh:mm AM/PM, HH:mm - DD/MM/YYYY, DD/MM/YYYY)
-  const parseExamDateTime = (dtStr?: string): Date | null => {
-    if (!dtStr) return null;
-    const str = String(dtStr).trim();
-    if (!str) return null;
-
-    try {
-      // 1. Standard Date constructor for ISO strings or valid browser formats
-      const dDirect = new Date(str);
-      if (!isNaN(dDirect.getTime()) && str.length > 8 && (str.includes('T') || str.includes('-'))) {
-        return dDirect;
-      }
-
-      // 2. Format from DateTimePicker UI: "MM/DD/YYYY hh:mm AM/PM" or "MM/DD/YYYY hh:mm"
-      const mmddyyyyMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?\s*(AM|PM)?)?/i);
-      if (mmddyyyyMatch) {
-        const m = parseInt(mmddyyyyMatch[1], 10) - 1;
-        const d = parseInt(mmddyyyyMatch[2], 10);
-        const y = parseInt(mmddyyyyMatch[3], 10);
-        let h = mmddyyyyMatch[4] ? parseInt(mmddyyyyMatch[4], 10) : 0;
-        const min = mmddyyyyMatch[5] ? parseInt(mmddyyyyMatch[5], 10) : 0;
-        const p = mmddyyyyMatch[7] ? mmddyyyyMatch[7].toUpperCase() : null;
-        if (p === 'PM' && h < 12) h += 12;
-        if (p === 'AM' && h === 12) h = 0;
-        const parsed = new Date(y, m, d, h, min);
-        if (!isNaN(parsed.getTime())) return parsed;
-      }
-
-      // 3. Vietnam format: "HH:mm - DD/MM/YYYY" or "HH:mm DD/MM/YYYY"
-      const hhmmddmmyyyyMatch = str.match(/(\d{1,2}):(\d{1,2})\s*[-–]?\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-      if (hhmmddmmyyyyMatch) {
-        const [_, hh, mm, dd, MM, yyyy] = hhmmddmmyyyyMatch;
-        const parsed = new Date(Number(yyyy), Number(MM) - 1, Number(dd), Number(hh), Number(mm));
-        if (!isNaN(parsed.getTime())) return parsed;
-      }
-
-      // 4. Format: "DD/MM/YYYY"
-      const ddmmyyyyMatch = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-      if (ddmmyyyyMatch) {
-        const [_, dd, MM, yyyy] = ddmmyyyyMatch;
-        const parsed = new Date(Number(yyyy), Number(MM) - 1, Number(dd), 23, 59, 59);
-        if (!isNaN(parsed.getTime())) return parsed;
-      }
-
-      if (!isNaN(dDirect.getTime())) {
-        return dDirect;
-      }
-    } catch {}
-    return null;
+  // Unified safe parser via dateTimeUtils (DD/MM/YYYY priority, Asia/Ho_Chi_Minh, no browser MM/DD swap)
+  const parseExamDateTime = (dtStr?: unknown): Date | null => {
+    if (isUnlimitedDeadline(dtStr)) return null;
+    return parseFirestoreDate(dtStr, { defaultEndOfDay: true, preferDayFirst: false });
   };
 
-  // Helper formatting date to display format dd/MM/yyyy HH:mm
-  const formatExamDateTimeDisplay = (dtStr?: string, fallback: string = ''): string => {
-    if (!dtStr) return fallback;
-    const parsed = parseExamDateTime(dtStr);
-    if (!parsed || isNaN(parsed.getTime())) {
-      return dtStr || fallback;
-    }
-    const dd = String(parsed.getDate()).padStart(2, '0');
-    const MM = String(parsed.getMonth() + 1).padStart(2, '0');
-    const yyyy = parsed.getFullYear();
-    const HH = String(parsed.getHours()).padStart(2, '0');
-    const mm = String(parsed.getMinutes()).padStart(2, '0');
-
-    return `${dd}/${MM}/${yyyy} ${HH}:${mm}`;
+  // Unified Vietnam DD/MM/YYYY HH:mm (24h, no AM/PM) formatter
+  const formatExamDateTimeDisplay = (dtStr?: unknown, fallback: string = 'Không giới hạn thời gian'): string => {
+    if (isUnlimitedDeadline(dtStr)) return fallback;
+    const formatted = formatDateTimeVN(dtStr, '');
+    return formatted || fallback;
   };
 
-  // Robust, unified status calculation function (no index-based hardcoding)
+  // Robust, unified status calculation function using dateTimeUtils
   const getExamStatus = (
     exam: ExamPaper,
     isSubmitted: boolean,
@@ -2120,17 +2067,16 @@ export const StudentExamModule: React.FC<StudentExamModuleProps> = ({
     if (exam.status === 'completed') return 'closed';
     if (exam.status === 'draft') return 'upcoming';
 
-    const startDate = parseExamDateTime(exam.startTime);
-    const endDate = parseExamDateTime(exam.endTime);
+    const schedule = getScheduleStatus({
+      startTime: exam.startTime,
+      dueDate: exam.endTime || (exam as any).dueDate,
+      isUnlimited: (exam as any).isUnlimited,
+      isDone: false,
+      now,
+    });
 
-    if (startDate && now.getTime() < startDate.getTime()) {
-      return 'upcoming';
-    }
-
-    if (endDate && now.getTime() > endDate.getTime()) {
-      return 'closed';
-    }
-
+    if (schedule.isUpcoming) return 'upcoming';
+    if (schedule.isExpired) return 'closed';
     return 'open';
   };
 
@@ -5166,6 +5112,12 @@ export const StudentExamModule: React.FC<StudentExamModuleProps> = ({
                 const isAlreadySubmitted = Boolean(studentSub);
                 const stateType = getExamStatus(ex, isAlreadySubmitted, new Date());
                 const subjColor = getSubjectColorStyles(ex.subject);
+                const examSchedule = getScheduleStatus({
+                  startTime: ex.startTime,
+                  dueDate: ex.endTime || (ex as any).dueDate,
+                  isUnlimited: (ex as any).isUnlimited,
+                  isDone: isAlreadySubmitted,
+                });
 
                 return (
                   <div
@@ -5190,32 +5142,41 @@ export const StudentExamModule: React.FC<StudentExamModuleProps> = ({
                         </div>
 
                         {/* Status badge */}
-                        {stateType === 'open' && (
-                          activeDrafts[ex.id] && activeDrafts[ex.id].remainingSeconds > 0 && activeDrafts[ex.id].answers && Object.keys(activeDrafts[ex.id].answers).length > 0 ? (
-                            <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs">
-                              <RotateCcw className="w-3 h-3 text-amber-600 animate-spin" /> Đang làm dở
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {stateType === 'open' && (
+                            activeDrafts[ex.id] && activeDrafts[ex.id].remainingSeconds > 0 && activeDrafts[ex.id].answers && Object.keys(activeDrafts[ex.id].answers).length > 0 ? (
+                              <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs">
+                                <RotateCcw className="w-3 h-3 text-amber-600 animate-spin" /> Đang làm dở
+                              </span>
+                            ) : (
+                              <>
+                                <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Đang mở
+                                </span>
+                                {examSchedule.isNearDeadline && examSchedule.countdownText && (
+                                  <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 border border-amber-300">
+                                    ⏰ {examSchedule.countdownText}
+                                  </span>
+                                )}
+                              </>
+                            )
+                          )}
+                          {stateType === 'submitted' && (
+                            <span className="bg-indigo-100 text-indigo-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" /> Đã nộp bài
                             </span>
-                          ) : (
-                            <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1">
-                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Đang mở
+                          )}
+                          {stateType === 'upcoming' && (
+                            <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1">
+                              <Clock className="w-3 h-3" /> Chưa mở
                             </span>
-                          )
-                        )}
-                        {stateType === 'submitted' && (
-                          <span className="bg-indigo-100 text-indigo-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" /> Đã nộp bài
-                          </span>
-                        )}
-                        {stateType === 'upcoming' && (
-                          <span className="bg-amber-100 text-amber-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1">
-                            <Clock className="w-3 h-3" /> Sắp mở
-                          </span>
-                        )}
-                        {stateType === 'closed' && (
-                          <span className="bg-slate-100 text-slate-600 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1">
-                            <Ban className="w-3 h-3" /> Đã đóng
-                          </span>
-                        )}
+                          )}
+                          {stateType === 'closed' && (
+                            <span className="bg-rose-100 text-rose-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 border border-rose-200">
+                              <Ban className="w-3 h-3" /> Đã hết hạn
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {/* Title */}
@@ -5231,11 +5192,19 @@ export const StudentExamModule: React.FC<StudentExamModuleProps> = ({
                         </div>
                         <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex items-center gap-2">
                           <Calendar className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span className="truncate">📅 Mở: <b>{formatExamDateTimeDisplay(ex.startTime, 'Chưa mở')}</b></span>
+                          <span className="truncate">📅 Mở: <b>{formatExamDateTimeDisplay(ex.startTime, 'Mở ngay')}</b></span>
                         </div>
-                        <div className="bg-red-50 p-2.5 rounded-xl border border-red-100 flex items-center gap-2 text-red-700">
-                          <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
-                          <span className="truncate">Hạn: <b>{formatExamDateTimeDisplay(ex.endTime, 'Vô thời hạn')}</b></span>
+                        <div className={`p-2.5 rounded-xl border flex items-center gap-2 ${
+                          examSchedule.isUnlimited ? 'bg-emerald-50/70 border-emerald-100 text-emerald-800' : 'bg-red-50 border-red-100 text-red-700'
+                        }`}>
+                          <AlertCircle className={`w-4 h-4 shrink-0 ${examSchedule.isUnlimited ? 'text-emerald-600' : 'text-red-500'}`} />
+                          <span className="truncate">
+                            {examSchedule.isUnlimited ? (
+                              <b>Không giới hạn thời gian</b>
+                            ) : (
+                              <>Hạn: <b>{formatExamDateTimeDisplay(ex.endTime || (ex as any).dueDate, 'Không giới hạn thời gian')}</b></>
+                            )}
+                          </span>
                         </div>
                       </div>
 

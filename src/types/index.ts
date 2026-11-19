@@ -232,6 +232,7 @@ export interface ExamPaper {
   testType?: string;
   startTime?: string;
   endTime?: string;
+  isUnlimited?: boolean;
   submissionsCount?: number;
   totalStudents?: number;
   authorType?: 'my' | 'colleague' | 'all';
@@ -260,6 +261,7 @@ export interface HomeworkAssignment {
   teacherId?: string;
   teacherEmail?: string;
   dueDate?: string;
+  isUnlimited?: boolean;
   assignedDate?: string;
   description?: string;
   totalStudents?: number;

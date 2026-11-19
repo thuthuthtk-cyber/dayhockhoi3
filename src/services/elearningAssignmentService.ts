@@ -3,6 +3,7 @@ import { collection, doc, setDoc, getDocs, deleteDoc, onSnapshot } from 'firebas
 import { Lesson5EPlan } from '../types';
 import { waitForWriteConfirmation } from './firestoreWriteVerificationService';
 import { getClassStudentCount } from './studentStorageService';
+import { isUnlimitedDeadline, toIsoDateTimeString } from '../utils/dateTimeUtils';
 
 export const ELEARNING_ASSIGNMENT_STORAGE_KEY = 'eduplay_assigned_elearning_lessons';
 export const ELEARNING_ASSIGNMENT_COLLECTION = 'assigned_elearning';
@@ -154,12 +155,12 @@ export function getLocalCachedAssignedELearning(): AssignedELearningLesson[] {
               grade: as.grade || 'Khối 3',
               targetClass: as.targetClass || 'Lớp 3A',
               assignedTo: as.assignedTo || 'all',
-              startDate: as.startDate || '01/09/2026 08:00 AM',
-              dueDate: as.dueDate || '30/10/2026 11:59 PM',
-              isUnlimited: as.isUnlimited ?? false,
+              startDate: as.startDate || as.assignedDate || as.createdAt || '',
+              dueDate: as.isUnlimited || isUnlimitedDeadline(as.dueDate) ? '' : (as.dueDate || ''),
+              isUnlimited: as.isUnlimited ?? isUnlimitedDeadline(as.dueDate),
               allowRetake: as.allowRetake ?? true,
               requireInteractiveVideo: as.requireInteractiveVideo ?? true,
-              assignedAt: as.assignedDate || as.assignedAt || new Date().toLocaleDateString('vi-VN'),
+              assignedAt: toIsoDateTimeString(as.assignedDate || as.assignedAt || as.createdAt) || toIsoDateTimeString(new Date()),
               assignedBy: as.teacherName || as.assignedBy || 'Thầy/Cô Giáo',
               lessonData: as.lessonData,
               type: 'elearning',
@@ -320,8 +321,10 @@ export async function saveAssignedELearningLesson(assignment: AssignedELearningL
           grade: normalizedRecord.grade,
           targetClass: normalizedRecord.targetClass,
           teacherName: normalizedRecord.assignedBy || 'Thầy/Cô Giáo',
-          dueDate: normalizedRecord.dueDate,
-          assignedDate: normalizedRecord.assignedAt,
+          dueDate: normalizedRecord.isUnlimited ? '' : (normalizedRecord.dueDate || ''),
+          isUnlimited: normalizedRecord.isUnlimited,
+          startDate: normalizedRecord.startDate || '',
+          assignedDate: normalizedRecord.assignedAt || toIsoDateTimeString(new Date()),
           description: `Bài học E-Learning: ${normalizedRecord.lessonTitle}`,
           totalStudents: getClassStudentCount(normalizedRecord.targetClass, 38),
           completedCount: 0,

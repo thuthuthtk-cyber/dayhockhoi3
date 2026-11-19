@@ -74,6 +74,14 @@ import { normalizeStudentCode, formatStandardStudentCode, normalizeStudentName }
 import { checkQuestionCorrectLocal } from './StudentExamModule';
 import { useAcademicYear } from '../../contexts/AcademicYearContext';
 import { formatScore, formatTotalScore, roundTotalScore, isSubjectWithScore, getQualitativeLevel, getQualitativeLabel, getCurrentSubmissionTimestamp, formatSubmissionDateTime } from '../../utils/scoreUtils';
+import { formatDateTimeVN, getScheduleStatus, isUnlimitedDeadline, parseFirestoreDate, toIsoDateTimeString } from '../../utils/dateTimeUtils';
+import {
+  DeadlineAuditRow,
+  applyConfirmedDeadlineFix,
+  downloadDeadlineBackupJson,
+  getSavedDeadlineBackups,
+  scanAllDeadlinesReadOnly
+} from '../../services/deadlineAuditService';
 
 import { StudentSubmissionDetailModal } from './StudentSubmissionDetailModal';
 import { createNotificationIfNotExists, LOW_SCORE_THRESHOLD } from '../../services/notificationService';
@@ -110,63 +118,22 @@ export interface StudentSubmissionRow {
  * Chuyển bất kỳ chuỗi Ngày giao / Ngày tạo / Date / Timestamp thành milliseconds để so sánh thời gian thực.
  */
 export function parseAssignedDateToTime(rawDate?: any, rawCreatedAt?: any): number {
-  const tryParse = (val?: any): number | null => {
-    if (!val) return null;
-    if (typeof val === 'number' && !isNaN(val)) return val;
-    if (val instanceof Date && !isNaN(val.getTime())) return val.getTime();
-    if (typeof val !== 'string') return null;
-
-    const s = val.trim();
-    if (!s) return null;
-
-    // Định dạng dd/mm/yyyy [HH:mm[:ss]] hoặc dd-mm-yyyy [HH:mm[:ss]]
-    const ddmmyyyyMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
-    if (ddmmyyyyMatch) {
-      const day = parseInt(ddmmyyyyMatch[1], 10);
-      const month = parseInt(ddmmyyyyMatch[2], 10) - 1;
-      const year = parseInt(ddmmyyyyMatch[3], 10);
-      const hour = ddmmyyyyMatch[4] ? parseInt(ddmmyyyyMatch[4], 10) : 0;
-      const minute = ddmmyyyyMatch[5] ? parseInt(ddmmyyyyMatch[5], 10) : 0;
-      const second = ddmmyyyyMatch[6] ? parseInt(ddmmyyyyMatch[6], 10) : 0;
-      const dateObj = new Date(year, month, day, hour, minute, second);
-      if (!isNaN(dateObj.getTime())) {
-        return dateObj.getTime();
-      }
-    }
-
-    // Thử Date.parse dành cho chuỗi ISO (e.g. 2026-11-08T19:05:00.000Z)
-    const parsed = Date.parse(s);
-    if (!isNaN(parsed)) {
-      return parsed;
-    }
-
-    return null;
-  };
-
-  const t1 = tryParse(rawDate);
-  if (t1 !== null) return t1;
-
-  const t2 = tryParse(rawCreatedAt);
-  if (t2 !== null) return t2;
-
+  const d1 = parseFirestoreDate(rawDate, { preferDayFirst: false, silent: true });
+  if (d1) return d1.getTime();
+  const d2 = parseFirestoreDate(rawCreatedAt, { preferDayFirst: false, silent: true });
+  if (d2) return d2.getTime();
   return 0;
 }
 
 /**
- * Chuẩn hóa hiển thị cột "NGÀY GIAO" theo đúng định dạng chuẩn: dd/mm/yyyy HH:mm
+ * Chuẩn hóa hiển thị cột "NGÀY GIAO" theo đúng định dạng chuẩn: DD/MM/YYYY HH:mm (giờ Việt Nam)
  */
 export function formatAssignedDateDisplay(rawDate?: any, rawCreatedAt?: any): string {
   const timeMs = parseAssignedDateToTime(rawDate, rawCreatedAt);
   if (timeMs <= 0) {
-    return '18/08/2026 00:00';
+    return '-';
   }
-  const date = new Date(timeMs);
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-  const hour = String(date.getHours()).padStart(2, '0');
-  const minute = String(date.getMinutes()).padStart(2, '0');
-  return `${day}/${month}/${year} ${hour}:${minute}`;
+  return formatDateTimeVN(timeMs, '-');
 }
 
 const CLASS_3A_STUDENTS: StudentSubmissionRow[] = [
@@ -1056,71 +1023,17 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
 
   const { classes: allRealClasses, getClassesForGrade: fetchClassesForGrade } = useClassesList();
 
-  // Helper to parse date string into timestamp (supporting dd/mm/yyyy HH:mm, MM/DD/YYYY hh:mm A, and ISO)
+  // Helper to parse date string safely into milliseconds
   const parseCustomDateTimeToMs = (dateStr?: string): number => {
-    if (!dateStr) return 0;
-    const isoMatch = dateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{1,2})/);
-    if (isoMatch) {
-      return new Date(
-        parseInt(isoMatch[1], 10),
-        parseInt(isoMatch[2], 10) - 1,
-        parseInt(isoMatch[3], 10),
-        parseInt(isoMatch[4], 10),
-        parseInt(isoMatch[5], 10)
-      ).getTime();
-    }
-    const match = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?:\s*(AM|PM))?)?/i);
-    if (match) {
-      const p1 = parseInt(match[1], 10);
-      const p2 = parseInt(match[2], 10);
-      const y = parseInt(match[3], 10);
-      let h = match[4] ? parseInt(match[4], 10) : 0;
-      const min = match[5] ? parseInt(match[5], 10) : 0;
-      const ampm = match[6] ? match[6].toUpperCase() : null;
-
-      let d = p1;
-      let m = p2 - 1;
-      if (p1 <= 12 && p2 > 12 && ampm) {
-        m = p1 - 1;
-        d = p2;
-      }
-      if (ampm === 'PM' && h < 12) h += 12;
-      if (ampm === 'AM' && h === 12) h = 0;
-      return new Date(y, m, d, h, min).getTime();
-    }
-    const d = new Date(dateStr);
-    return isNaN(d.getTime()) ? 0 : d.getTime();
+    const parsed = parseFirestoreDate(dateStr, { preferDayFirst: false, silent: true });
+    return parsed ? parsed.getTime() : 0;
   };
 
   const formatToDdMmYyyyHhMm = (dateInput?: string | Date): string => {
     if (!dateInput) {
-      const now = new Date();
-      const dd = String(now.getDate()).padStart(2, '0');
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const yyyy = now.getFullYear();
-      const hh = String(now.getHours()).padStart(2, '0');
-      const min = String(now.getMinutes()).padStart(2, '0');
-      return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
+      return formatDateTimeVN(new Date());
     }
-    if (typeof dateInput === 'string') {
-      const ms = parseCustomDateTimeToMs(dateInput);
-      if (ms > 0) {
-        const d = new Date(ms);
-        const dd = String(d.getDate()).padStart(2, '0');
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const yyyy = d.getFullYear();
-        const hh = String(d.getHours()).padStart(2, '0');
-        const min = String(d.getMinutes()).padStart(2, '0');
-        return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
-      }
-      return dateInput;
-    }
-    const dd = String(dateInput.getDate()).padStart(2, '0');
-    const mm = String(dateInput.getMonth() + 1).padStart(2, '0');
-    const yyyy = dateInput.getFullYear();
-    const hh = String(dateInput.getHours()).padStart(2, '0');
-    const min = String(dateInput.getMinutes()).padStart(2, '0');
-    return `${dd}/${mm}/${yyyy} ${hh}:${min}`;
+    return formatDateTimeVN(dateInput, typeof dateInput === 'string' ? dateInput : '-');
   };
 
   const getHomeworkRootId = (as: HomeworkAssignment): string => {
@@ -1164,6 +1077,8 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
   const [selectedAssignClasses, setSelectedAssignClasses] = useState<string[]>([]);
   const [assignStartDate, setAssignStartDate] = useState<string>('');
   const [assignDueDate, setAssignDueDate] = useState<string>('');
+  const [assignUnlimited, setAssignUnlimited] = useState<boolean>(true);
+  const [assignDateError, setAssignDateError] = useState<string | null>(null);
   const [assignMaxAttempts, setAssignMaxAttempts] = useState<string>('Không giới hạn số lần luyện tập');
   const [assignShuffleQuestions, setAssignShuffleQuestions] = useState<boolean>(true);
   const [assignShuffleOptions, setAssignShuffleOptions] = useState<boolean>(true);
@@ -1175,6 +1090,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
   const [editingConfigAssignment, setEditingConfigAssignment] = useState<HomeworkAssignment | null>(null);
   const [editConfigStartDate, setEditConfigStartDate] = useState<string>('');
   const [editConfigDueDate, setEditConfigDueDate] = useState<string>('');
+  const [editConfigUnlimited, setEditConfigUnlimited] = useState<boolean>(true);
   const [editConfigMaxAttempts, setEditConfigMaxAttempts] = useState<string>('Không giới hạn số lần luyện tập');
   const [editConfigShuffleQuestions, setEditConfigShuffleQuestions] = useState<boolean>(true);
   const [editConfigShuffleOptions, setEditConfigShuffleOptions] = useState<boolean>(true);
@@ -1200,9 +1116,100 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
   const isDebugMode = typeof window !== 'undefined' && window.location.search.includes('debug=1');
   const [isScanDuplicatesModalOpen, setIsScanDuplicatesModalOpen] = useState(false);
 
+  // Deadline Audit & Standardization tool state (Read-only preview -> Confirmed per-row fix)
+  const [isDeadlineAuditOpen, setIsDeadlineAuditOpen] = useState(false);
+  const [isScanningDeadlines, setIsScanningDeadlines] = useState(false);
+  const [deadlineAuditRows, setDeadlineAuditRows] = useState<DeadlineAuditRow[]>([]);
+  const [deadlineAuditFilter, setDeadlineAuditFilter] = useState<'issues' | 'all'>('issues');
+  const [deadlineAuditError, setDeadlineAuditError] = useState<string | null>(null);
+  const [auditRowOverrides, setAuditRowOverrides] = useState<
+    Record<string, { startIso: string; dueIso: string; unlimited: boolean }>
+  >({});
+  const [confirmingAuditKey, setConfirmingAuditKey] = useState<string | null>(null);
+  const [fixedAuditKeys, setFixedAuditKeys] = useState<Record<string, boolean>>({});
+
   const getClassesForGrade = useCallback((gradeRaw?: string): string[] => {
     return fetchClassesForGrade(gradeRaw).map(c => c.name);
   }, [fetchClassesForGrade]);
+
+  const handleOpenDeadlineAudit = async () => {
+    setIsDeadlineAuditOpen(true);
+    setIsScanningDeadlines(true);
+    setDeadlineAuditError(null);
+    setFixedAuditKeys({});
+    try {
+      const rows = await scanAllDeadlinesReadOnly();
+      setDeadlineAuditRows(rows);
+      const initialOverrides: Record<string, { startIso: string; dueIso: string; unlimited: boolean }> = {};
+      rows.forEach((r) => {
+        const key = `${r.collectionName}::${r.docId}`;
+        initialOverrides[key] = {
+          startIso: r.suggestedStartIso,
+          dueIso: r.suggestedDueIso,
+          unlimited: r.suggestedUnlimited,
+        };
+      });
+      setAuditRowOverrides(initialOverrides);
+    } catch (err: any) {
+      console.error('Lỗi quét hạn nộp:', err);
+      setDeadlineAuditError(err?.message || 'Không thể quét dữ liệu Firestore.');
+    } finally {
+      setIsScanningDeadlines(false);
+    }
+  };
+
+  const handleConfirmAuditRowFix = async (row: DeadlineAuditRow) => {
+    const key = `${row.collectionName}::${row.docId}`;
+    const override = auditRowOverrides[key] || {
+      startIso: row.suggestedStartIso,
+      dueIso: row.suggestedDueIso,
+      unlimited: row.suggestedUnlimited,
+    };
+
+    if (!override.unlimited) {
+      const dueDateObj = parseFirestoreDate(override.dueIso, { defaultEndOfDay: true });
+      const startDateObj = override.startIso ? parseFirestoreDate(override.startIso) : null;
+      if (!dueDateObj) {
+        setDeadlineAuditError(`Dòng "${row.title}" chưa có hạn nộp hợp lệ. Hãy chọn ngày giờ hoặc chuyển sang "Không giới hạn thời gian".`);
+        return;
+      }
+      if (startDateObj && dueDateObj.getTime() <= startDateObj.getTime()) {
+        setDeadlineAuditError(`Hạn nộp đề xuất của "${row.title}" phải lớn hơn thời điểm mở/giao bài.`);
+        return;
+      }
+    }
+
+    setDeadlineAuditError(null);
+    setConfirmingAuditKey(key);
+    try {
+      await applyConfirmedDeadlineFix({
+        row,
+        targetStartIso: override.startIso,
+        targetDueIso: override.unlimited ? '' : toIsoDateTimeString(override.dueIso),
+        setUnlimited: override.unlimited,
+      });
+      setFixedAuditKeys((prev) => ({ ...prev, [key]: true }));
+      if (row.collectionName === 'assignments') {
+        const existingLocal = assignments.find((a) => a.id === row.docId);
+        if (existingLocal) {
+          onSaveAssignment({
+            ...existingLocal,
+            startDate: override.startIso || existingLocal.startDate,
+            assignedDate: override.startIso || existingLocal.assignedDate,
+            dueDate: override.unlimited ? '' : toIsoDateTimeString(override.dueIso),
+            isUnlimited: override.unlimited,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+      showToast(`✅ Đã sao lưu và chuẩn hóa hạn nộp cho "${row.title}" (${row.targetClass})!`);
+    } catch (err: any) {
+      console.error('Lỗi xác nhận sửa hạn nộp:', err);
+      setDeadlineAuditError(`Không thể lưu thay đổi cho "${row.title}": ${err?.message || String(err)}`);
+    } finally {
+      setConfirmingAuditKey(null);
+    }
+  };
 
   const handleOpenAssignConfig = (as: HomeworkAssignment) => {
     setAssigningConfigAssignment(as);
@@ -1214,12 +1221,17 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
       
     setSelectedAssignClasses(initialClasses);
     const now = new Date();
-    setAssignStartDate(formatToDdMmYyyyHhMm(now));
+    setAssignStartDate(toIsoDateTimeString(now));
 
+    const isUnlim = as.isUnlimited === true || isUnlimitedDeadline(as.dueDate);
+    setAssignUnlimited(isUnlim);
+
+    const parsedDue = !isUnlim ? parseFirestoreDate(as.dueDate, { defaultEndOfDay: true }) : null;
     const nowPlus7 = new Date(now);
     nowPlus7.setDate(nowPlus7.getDate() + 7);
     nowPlus7.setHours(23, 59, 0, 0);
-    setAssignDueDate(as.dueDate ? formatToDdMmYyyyHhMm(as.dueDate) : formatToDdMmYyyyHhMm(nowPlus7));
+    setAssignDueDate(parsedDue ? toIsoDateTimeString(parsedDue) : toIsoDateTimeString(nowPlus7));
+    setAssignDateError(null);
 
     setAssignMaxAttempts('Không giới hạn số lần luyện tập');
     setAssignShuffleQuestions(true);
@@ -1232,18 +1244,18 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
   const handleOpenEditConfig = (as: HomeworkAssignment) => {
     setEditingConfigAssignment(as);
     const now = new Date();
-    const defaultStart = formatToDdMmYyyyHhMm(as.startDate || as.assignedDate || now);
-    
-    let defaultDue = as.dueDate ? formatToDdMmYyyyHhMm(as.dueDate) : '';
-    if (!defaultDue) {
-      const d = new Date(now);
-      d.setDate(d.getDate() + 7);
-      d.setHours(23, 59, 0, 0);
-      defaultDue = formatToDdMmYyyyHhMm(d);
-    }
+    const startObj = parseFirestoreDate(as.startDate || as.assignedDate || as.createdAt) || now;
+    setEditConfigStartDate(toIsoDateTimeString(startObj));
 
-    setEditConfigStartDate(defaultStart);
-    setEditConfigDueDate(defaultDue);
+    const isUnlim = as.isUnlimited === true || isUnlimitedDeadline(as.dueDate);
+    setEditConfigUnlimited(isUnlim);
+
+    const parsedDue = !isUnlim ? parseFirestoreDate(as.dueDate, { defaultEndOfDay: true }) : null;
+    const fallbackPlus7 = new Date(now);
+    fallbackPlus7.setDate(fallbackPlus7.getDate() + 7);
+    fallbackPlus7.setHours(23, 59, 0, 0);
+    setEditConfigDueDate(parsedDue ? toIsoDateTimeString(parsedDue) : toIsoDateTimeString(fallbackPlus7));
+
     setEditConfigMaxAttempts(as.maxAttempts || (as.allowRepeat === false ? '1 lần' : 'Không giới hạn số lần luyện tập'));
     setEditConfigShuffleQuestions(as.shuffleQuestions !== false);
     setEditConfigShuffleOptions(as.shuffleOptions !== false);
@@ -1256,12 +1268,25 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
   const handleSaveEditConfig = async () => {
     if (!editingConfigAssignment) return;
 
-    const startMs = parseCustomDateTimeToMs(editConfigStartDate);
-    const dueMs = parseCustomDateTimeToMs(editConfigDueDate);
+    const startObj = parseFirestoreDate(editConfigStartDate) || new Date();
+    const effectiveStartIso = toIsoDateTimeString(startObj);
+    let effectiveDueIso = '';
 
-    if (startMs > 0 && dueMs > 0 && dueMs <= startMs) {
-      setEditConfigDateError('Thời điểm hết hạn làm bài phải sau thời điểm bắt đầu giao bài!');
-      return;
+    if (!editConfigUnlimited) {
+      const dueObj = parseFirestoreDate(editConfigDueDate, { defaultEndOfDay: true });
+      if (!dueObj) {
+        setEditConfigDateError('Vui lòng chọn hạn nộp bài hợp lệ hoặc bật "Không giới hạn thời gian"!');
+        return;
+      }
+      if (dueObj.getTime() <= startObj.getTime()) {
+        setEditConfigDateError('Thời điểm hết hạn làm bài phải lớn hơn thời điểm bắt đầu giao bài!');
+        return;
+      }
+      if (dueObj.getTime() <= Date.now()) {
+        setEditConfigDateError('Hạn nộp bài phải ở tương lai (sau thời điểm hiện tại)!');
+        return;
+      }
+      effectiveDueIso = toIsoDateTimeString(dueObj);
     }
 
     try {
@@ -1269,9 +1294,10 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
       const targetDocs = editConfigApplyToGroup && groupList.length > 0 ? groupList : [editingConfigAssignment];
 
       const patch: any = {
-        startDate: editConfigStartDate,
-        assignedDate: editConfigStartDate,
-        dueDate: editConfigDueDate,
+        startDate: effectiveStartIso,
+        assignedDate: effectiveStartIso,
+        dueDate: editConfigUnlimited ? '' : effectiveDueIso,
+        isUnlimited: editConfigUnlimited,
         maxAttempts: editConfigMaxAttempts,
         allowRepeat: editConfigMaxAttempts === 'Không giới hạn số lần luyện tập' || editConfigMaxAttempts !== '1 lần',
         shuffleQuestions: editConfigShuffleQuestions,
@@ -1311,6 +1337,9 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
   ) => {
     if (!assigningConfigAssignment) return;
 
+    const effectiveStartIso = toIsoDateTimeString(parseFirestoreDate(assignStartDate) || new Date());
+    const effectiveDueIso = assignUnlimited ? '' : toIsoDateTimeString(assignDueDate);
+
     try {
       const rootId = assigningConfigAssignment.originalAssignmentId || assigningConfigAssignment.id.replace(/-class-.*$/, '');
 
@@ -1320,9 +1349,10 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
           if (existing && existing.id) {
             const patch: any = {
               title: finalTitle,
-              startDate: assignStartDate,
-              assignedDate: assignStartDate,
-              dueDate: assignDueDate,
+              startDate: effectiveStartIso,
+              assignedDate: effectiveStartIso,
+              dueDate: effectiveDueIso,
+              isUnlimited: assignUnlimited,
               maxAttempts: assignMaxAttempts,
               allowRepeat: assignMaxAttempts === 'Không giới hạn số lần luyện tập' || assignMaxAttempts !== '1 lần',
               shuffleQuestions: assignShuffleQuestions,
@@ -1347,9 +1377,10 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
               title: finalTitle,
               targetClass: cls,
               targetClasses: [cls],
-              startDate: assignStartDate,
-              assignedDate: assignStartDate,
-              dueDate: assignDueDate,
+              startDate: effectiveStartIso,
+              assignedDate: effectiveStartIso,
+              dueDate: effectiveDueIso,
+              isUnlimited: assignUnlimited,
               maxAttempts: assignMaxAttempts,
               allowRepeat: assignMaxAttempts === 'Không giới hạn số lần luyện tập' || assignMaxAttempts !== '1 lần',
               shuffleQuestions: assignShuffleQuestions,
@@ -1391,9 +1422,10 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
           title: assignTitleResolved,
           targetClass: cls,
           targetClasses: [cls],
-          startDate: assignStartDate,
-          assignedDate: assignStartDate,
-          dueDate: assignDueDate,
+          startDate: effectiveStartIso,
+          assignedDate: effectiveStartIso,
+          dueDate: effectiveDueIso,
+          isUnlimited: assignUnlimited,
           maxAttempts: assignMaxAttempts,
           allowRepeat: assignMaxAttempts === 'Không giới hạn số lần luyện tập' || assignMaxAttempts !== '1 lần',
           shuffleQuestions: assignShuffleQuestions,
@@ -1422,17 +1454,32 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
 
   const handleConfirmAssignConfig = () => {
     if (!assigningConfigAssignment) return;
+    setAssignDateError(null);
 
     if (selectedAssignClasses.length === 0) {
-      alert('Vui lòng chọn ít nhất 1 lớp học để giao bài tập!');
+      setAssignDateError('Vui lòng chọn ít nhất 1 lớp học để giao bài tập!');
       return;
     }
 
-    const startMs = parseCustomDateTimeToMs(assignStartDate);
-    const dueMs = parseCustomDateTimeToMs(assignDueDate);
-    if (startMs > 0 && dueMs > 0 && dueMs <= startMs) {
-      alert('Thời điểm hết hạn làm bài phải sau thời điểm bắt đầu giao bài!');
-      return;
+    const startObj = parseFirestoreDate(assignStartDate) || new Date();
+    const effectiveStartIso = toIsoDateTimeString(startObj);
+    let effectiveDueIso = '';
+
+    if (!assignUnlimited) {
+      const dueObj = parseFirestoreDate(assignDueDate, { defaultEndOfDay: true });
+      if (!dueObj) {
+        setAssignDateError('Vui lòng chọn hạn làm bài hợp lệ hoặc bật "Không giới hạn thời gian"!');
+        return;
+      }
+      if (dueObj.getTime() <= startObj.getTime()) {
+        setAssignDateError('Thời điểm hết hạn làm bài phải sau thời điểm bắt đầu giao bài!');
+        return;
+      }
+      if (dueObj.getTime() <= Date.now()) {
+        setAssignDateError('Hạn nộp bài phải ở tương lai (sau thời điểm hiện tại)!');
+        return;
+      }
+      effectiveDueIso = toIsoDateTimeString(dueObj);
     }
 
     // Check conflict: classes that were already assigned this homework
@@ -1456,8 +1503,8 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
         conflicts,
         newTitle: assignTitle.trim() || assigningConfigAssignment.title,
         selectedClasses: [...selectedAssignClasses],
-        startDate: assignStartDate,
-        dueDate: assignDueDate,
+        startDate: effectiveStartIso,
+        dueDate: effectiveDueIso,
         maxAttempts: assignMaxAttempts,
         shuffleQuestions: assignShuffleQuestions,
         shuffleOptions: assignShuffleOptions,
@@ -1511,21 +1558,26 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
   };
 
   const handleCopyAndAssign = (as: HomeworkAssignment) => {
+    const nowIso = toIsoDateTimeString(new Date());
+    const copiedIsUnlimited = as.isUnlimited ?? isUnlimitedDeadline(as.dueDate);
     const copiedAssignment: HomeworkAssignment = {
       ...as,
       id: `as-copy-${Date.now()}`,
       title: `${as.title} (Bản sao giao cho lớp)`,
-      targetClass: 'Lớp 3A',
+      targetClass: 'Lớp 3C',
       authorType: 'my',
       teacherId: activeTeacherProfile.id,
       teacherName: activeTeacherProfile.name,
       teacherEmail: activeTeacherProfile.email,
       createdBy: activeTeacherProfile.id,
-      assignedDate: new Date().toLocaleDateString('vi-VN'),
+      startDate: nowIso,
+      assignedDate: nowIso,
+      dueDate: copiedIsUnlimited ? '' : (toIsoDateTimeString(as.dueDate) || ''),
+      isUnlimited: copiedIsUnlimited,
       submissions: []
     };
     onSaveAssignment(copiedAssignment);
-    showToast(`✅ Đã sao chép & giao bài tập "${as.title}" cho Lớp 3A thành công!`);
+    showToast(`✅ Đã sao chép & giao bài tập "${as.title}" cho Lớp 3C thành công!`);
   };
 
   useEffect(() => {
@@ -1715,21 +1767,20 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
   const getFormattedDateTimeInput = (addDays: number = 7): string => {
     const d = new Date();
     d.setDate(d.getDate() + addDays);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
-    return `${year}-${month}-${day}T${hours}:${minutes}`;
+    d.setHours(23, 59, 0, 0);
+    return toIsoDateTimeString(d);
   };
 
   // Create/Edit Form fields
   const [formTitle, setFormTitle] = useState('');
   const [formSubject, setFormSubject] = useState('Công nghệ');
   const [formGrade, setFormGrade] = useState('Khối 3');
-  const [formTargetClass, setFormTargetClass] = useState('Lớp 3A');
+  const [formTargetClass, setFormTargetClass] = useState('Lớp 3C');
   const [formTeacherName, setFormTeacherName] = useState(() => effectiveTeacherName);
+  const [formStartDate, setFormStartDate] = useState(() => toIsoDateTimeString(new Date()));
   const [formDueDate, setFormDueDate] = useState(() => getFormattedDateTimeInput(7));
+  const [formIsUnlimited, setFormIsUnlimited] = useState<boolean>(true);
+  const [formDateError, setFormDateError] = useState<string | null>(null);
   const [formDescription, setFormDescription] = useState('');
   const [formQuestions, setFormQuestions] = useState<QuestionItem[]>([]);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
@@ -1741,7 +1792,9 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
     subject: string;
     grade: string;
     classes: string[];
+    startDate?: string;
     dueDate: string;
+    isUnlimited?: boolean;
     questionCount: number;
     selectedQuestions: QuestionItem[];
     maxAttempts: string;
@@ -1755,18 +1808,24 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
       return;
     }
     const classes = Array.from(new Set(rawClasses.map(c => c.trim()).filter(Boolean)));
+    const nowIso = toIsoDateTimeString(new Date());
+    const startIso = config.startDate ? (toIsoDateTimeString(config.startDate) || nowIso) : nowIso;
+    const isUnlim = Boolean(config.isUnlimited || isUnlimitedDeadline(config.dueDate));
+    const dueIso = isUnlim ? '' : toIsoDateTimeString(config.dueDate);
 
-    classes.forEach((cls, idx) => {
+    classes.forEach((cls) => {
       const classRoster = getStudentsFromLocalStorage(cls) || generateDefaultClassRoster(cls, 38);
       const realTotal = classRoster && classRoster.length > 0 ? classRoster.length : (cls.includes('3C') ? 38 : 35);
 
       const newAssignment: HomeworkAssignment = {
         id: classes.length === 1 ? rootId : `${rootId}-class-${cls.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-        title: config.title || `Bài tập rèn luyện môn ${config.subject} (${new Date().toLocaleDateString('vi-VN')})`,
+        title: config.title || `Bài tập rèn luyện môn ${config.subject} (${formatDateTimeVN(new Date(), '')})`,
         subject: config.subject,
         grade: config.grade,
         targetClass: cls,
-        dueDate: config.dueDate || '2026-09-10T23:59',
+        startDate: startIso,
+        dueDate: dueIso,
+        isUnlimited: isUnlim,
         description: `Bài tập tự luyện từ Ngân hàng câu hỏi gồm ${config.selectedQuestions.length} câu hỏi chuẩn sư phạm.`,
         questions: config.selectedQuestions,
         teacherId: activeTeacherProfile.id,
@@ -1774,7 +1833,11 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
         teacherEmail: activeTeacherProfile.email,
         createdBy: activeTeacherProfile.id,
         authorType: 'my',
-        assignedDate: new Date().toLocaleDateString('vi-VN'),
+        assignedDate: startIso,
+        maxAttempts: config.maxAttempts,
+        allowRepeat: config.maxAttempts === 'Không giới hạn số lần luyện tập' || config.maxAttempts !== '1 lần',
+        shuffleQuestions: config.shuffleQuestions,
+        shuffleOptions: config.shuffleOptions,
         totalStudents: realTotal,
         completedCount: 0,
         submissions: [],
@@ -1933,9 +1996,31 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
 
   // Create Assignment handler
   const handleSaveForm = () => {
+    setFormDateError(null);
     if (!formTitle.trim()) {
-      showToast('Vui lòng nhập tiêu đề bài tập!');
+      setFormDateError('Vui lòng nhập tiêu đề bài tập!');
       return;
+    }
+
+    const startObj = parseFirestoreDate(formStartDate) || new Date();
+    const startIso = toIsoDateTimeString(startObj);
+    let dueIso = '';
+
+    if (!formIsUnlimited) {
+      const dueObj = parseFirestoreDate(formDueDate, { defaultEndOfDay: true });
+      if (!dueObj) {
+        setFormDateError('Vui lòng chọn hạn nộp bài hợp lệ hoặc bật "Không giới hạn thời gian"!');
+        return;
+      }
+      if (dueObj.getTime() <= startObj.getTime()) {
+        setFormDateError('Hạn nộp bài phải lớn hơn thời điểm mở bài!');
+        return;
+      }
+      if (dueObj.getTime() <= Date.now()) {
+        setFormDateError('Hạn nộp bài phải ở tương lai (sau thời điểm hiện tại)!');
+        return;
+      }
+      dueIso = toIsoDateTimeString(dueObj);
     }
 
     const sanitizedQuestions = (formQuestions || []).map(q => sanitizeQuestionForFirestore(q));
@@ -1953,14 +2038,16 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
       teacherName: editingAssignment?.teacherName || formTeacherName || activeTeacherProfile.name,
       teacherEmail: activeTeacherProfile.email,
       createdBy: editingAssignment?.createdBy || activeTeacherProfile.id,
-      assignedDate: editingAssignment?.assignedDate || '18/8/2026',
-      dueDate: formDueDate,
+      startDate: startIso,
+      assignedDate: toIsoDateTimeString(parseFirestoreDate(editingAssignment?.assignedDate) || startObj),
+      dueDate: formIsUnlimited ? '' : dueIso,
+      isUnlimited: formIsUnlimited,
       description: formDescription,
       totalStudents: realTotal,
       completedCount: editingAssignment?.completedCount || 0,
       isApproved: true,
       authorType: 'my',
-      createdAt: new Date().toLocaleDateString('vi-VN'),
+      createdAt: editingAssignment?.createdAt || new Date().toISOString(),
       questions: sanitizedQuestions,
       submissions: editingAssignment ? editingAssignment.submissions : []
     };
@@ -1969,16 +2056,19 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
     setIsCreatingModalOpen(false);
     setEditingAssignment(null);
     resetForm();
-    showToast(editingAssignment ? 'Cập nhật bài tập thành công!' : 'Tạo bài tập mới từ ngân hàng câu hỏi thành công!');
+    showToast(editingAssignment ? 'Cập nhật bài tập thành công!' : 'Tạo bài tập mới thành công!');
   };
 
   const resetForm = () => {
     setFormTitle('');
     setFormSubject('Công nghệ');
     setFormGrade('Khối 3');
-    setFormTargetClass('Lớp 3A');
+    setFormTargetClass('Lớp 3C');
     setFormTeacherName(effectiveTeacherName);
-    setFormDueDate('2026-09-10T23:59');
+    setFormStartDate(toIsoDateTimeString(new Date()));
+    setFormDueDate(getFormattedDateTimeInput(7));
+    setFormIsUnlimited(true);
+    setFormDateError(null);
     setFormDescription('');
     setFormQuestions([]);
   };
@@ -1993,10 +2083,16 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
     setFormTitle(as.title);
     setFormSubject(as.subject);
     setFormGrade(as.grade || 'Khối 3');
-    setFormTargetClass(as.targetClass);
+    setFormTargetClass(as.targetClass || 'Lớp 3C');
     setFormTeacherName(as.teacherName || effectiveTeacherName);
-    setFormDueDate(as.dueDate);
-    setFormDescription(as.description);
+    const startObj = parseFirestoreDate(as.startDate || as.assignedDate || as.createdAt) || new Date();
+    setFormStartDate(toIsoDateTimeString(startObj));
+    const isUnlim = as.isUnlimited === true || isUnlimitedDeadline(as.dueDate);
+    setFormIsUnlimited(isUnlim);
+    const parsedDue = !isUnlim ? parseFirestoreDate(as.dueDate, { defaultEndOfDay: true }) : null;
+    setFormDueDate(parsedDue ? toIsoDateTimeString(parsedDue) : getFormattedDateTimeInput(7));
+    setFormDateError(null);
+    setFormDescription(as.description || '');
     setFormQuestions(as.questions || []);
     setIsCreatingModalOpen(true);
     setOpenActionMenuId(null);
@@ -2009,9 +2105,8 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
       setOpenActionMenuId(null);
       return;
     }
-    if (confirm('Bạn có chắc chắn muốn xóa bài tập này không?')) {
-      if (onDeleteAssignment) onDeleteAssignment(id);
-      showToast('Đã xóa bài tập khỏi hệ thống!');
+    if (target) {
+      setDeletingAssignment(target);
       setOpenActionMenuId(null);
     }
   };
@@ -2197,6 +2292,14 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
           </h3>
 
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleOpenDeadlineAudit}
+              className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-all"
+              title="Quét chỉ đọc hạn nộp bài tập, đề kiểm tra, E-Learning và xem trước bảng chuẩn hóa an toàn"
+            >
+              <Clock className="w-4 h-4 text-indigo-600" />
+              <span>Rà soát & Chuẩn hóa Hạn nộp</span>
+            </button>
             {isDebugMode && (
               <button
                 onClick={() => setIsScanDuplicatesModalOpen(true)}
@@ -2396,6 +2499,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
                     )}
                   </div>
                 </th>
+                <th className="py-3.5 px-4 whitespace-nowrap">HẠN NỘP</th>
                 <th className="py-3.5 px-4 whitespace-nowrap">ĐÃ LÀM</th>
                 <th className="py-3.5 px-4 text-center whitespace-nowrap">THAO TÁC</th>
               </tr>
@@ -2403,7 +2507,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
             <tbody className="divide-y divide-slate-100 bg-white">
               {paginatedAssignments.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center py-12 text-slate-400 font-medium">
+                  <td colSpan={7} className="text-center py-12 text-slate-400 font-medium">
                     Không tìm thấy bài tập nào phù hợp với bộ lọc.
                   </td>
                 </tr>
@@ -2485,6 +2589,48 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
                       {/* Ngày giao */}
                       <td className="py-4 px-4 whitespace-nowrap text-slate-700 font-semibold font-mono text-xs">
                         {formatAssignedDateDisplay(as.assignedDate || as.startDate, as.createdAt)}
+                      </td>
+
+                      {/* Hạn nộp */}
+                      <td className="py-4 px-4 whitespace-nowrap text-xs">
+                        {(() => {
+                          const schedule = getScheduleStatus({
+                            startTime: as.startDate || as.assignedDate || as.createdAt,
+                            dueDate: as.dueDate,
+                            isUnlimited: as.isUnlimited,
+                          });
+                          return (
+                            <div className="space-y-1">
+                              <div className={`font-mono font-bold ${
+                                schedule.isUnlimited
+                                  ? 'text-emerald-700 font-sans'
+                                  : schedule.isExpired
+                                    ? 'text-rose-600'
+                                    : 'text-slate-800'
+                              }`}>
+                                {schedule.isUnlimited
+                                  ? 'Không giới hạn thời gian'
+                                  : formatDateTimeVN(as.dueDate, 'Không giới hạn thời gian')}
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                  schedule.isUpcoming
+                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                    : schedule.isExpired
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                }`}>
+                                  {schedule.badgeLabel}
+                                </span>
+                                {schedule.countdownText && (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    {schedule.countdownText}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Đã làm */}
@@ -2721,6 +2867,63 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
                 placeholder="Mô tả nội dung bài tập, yêu cầu rèn luyện cho học sinh..."
                 className="w-full p-3 text-xs rounded-xl border border-slate-300 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 font-medium"
               />
+            </div>
+
+            {/* Thời điểm mở bài & Hạn nộp bài */}
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-indigo-600" />
+                  <span>Thời điểm mở bài & Hạn nộp bài (Giờ Việt Nam)</span>
+                </span>
+                <label className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={formIsUnlimited}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setFormIsUnlimited(checked);
+                      setFormDateError(null);
+                      if (!checked && !formDueDate) {
+                        setFormDueDate(getFormattedDateTimeInput(7));
+                      }
+                    }}
+                    className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                  />
+                  <span>Không giới hạn thời gian</span>
+                </label>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-600 uppercase block">Thời điểm mở bài</label>
+                  <DateTimePicker
+                    value={formStartDate}
+                    onChange={(val) => {
+                      setFormStartDate(val);
+                      setFormDateError(null);
+                    }}
+                    placeholder="DD/MM/YYYY HH:mm"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-600 uppercase block">Hạn nộp bài</label>
+                  <DateTimePicker
+                    disabled={formIsUnlimited}
+                    value={formIsUnlimited ? '' : formDueDate}
+                    onChange={(val) => {
+                      setFormDueDate(val);
+                      setFormDateError(null);
+                    }}
+                    placeholder={formIsUnlimited ? 'Không giới hạn thời gian' : 'DD/MM/YYYY HH:mm'}
+                  />
+                </div>
+              </div>
+              {formDateError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{formDateError}</span>
+                </div>
+              )}
             </div>
 
             {/* Questions Section with Full Cards & Editing */}
@@ -4693,34 +4896,68 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
               })()}
 
               {/* 3 & 4. Lên lịch giao bài & Đặt hạn làm bài */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                    <Clock className="w-4 h-4 text-emerald-600" />
-                    <span>Lên lịch giao bài</span>
-                  </label>
-                  <DateTimePicker
-                    value={assignStartDate}
-                    onChange={setAssignStartDate}
-                    placeholder="DD/MM/YYYY HH:mm"
-                    format="dd/mm/yyyy HH:mm"
-                  />
-                  <p className="text-[11px] text-slate-400 font-medium">Thời điểm bài tập bắt đầu hiển thị cho học sinh</p>
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                      <Clock className="w-4 h-4 text-emerald-600" />
+                      <span>Lên lịch giao bài</span>
+                    </label>
+                    <DateTimePicker
+                      value={assignStartDate}
+                      onChange={(val) => {
+                        setAssignStartDate(val);
+                        setAssignDateError(null);
+                      }}
+                      placeholder="DD/MM/YYYY HH:mm"
+                    />
+                    <p className="text-[11px] text-slate-400 font-medium">Thời điểm bài tập bắt đầu hiển thị cho học sinh</p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600" />
+                        <span>Đặt hạn làm bài</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={assignUnlimited}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setAssignUnlimited(checked);
+                            setAssignDateError(null);
+                            if (!checked && !assignDueDate) {
+                              setAssignDueDate(getFormattedDateTimeInput(7));
+                            }
+                          }}
+                          className="rounded text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
+                        />
+                        <span>Không giới hạn thời gian</span>
+                      </label>
+                    </div>
+                    <DateTimePicker
+                      disabled={assignUnlimited}
+                      value={assignUnlimited ? '' : assignDueDate}
+                      onChange={(val) => {
+                        setAssignDueDate(val);
+                        setAssignDateError(null);
+                      }}
+                      placeholder={assignUnlimited ? 'Không giới hạn thời gian' : 'DD/MM/YYYY HH:mm'}
+                    />
+                    <p className="text-[11px] text-slate-400 font-medium">
+                      {assignUnlimited ? 'Học sinh có thể làm bài bất kỳ lúc nào (không khóa hạn)' : 'Thời điểm hết hạn nộp bài rèn luyện (giờ Việt Nam)'}
+                    </p>
+                  </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" />
-                    <span>Đặt hạn làm bài</span>
-                  </label>
-                  <DateTimePicker
-                    value={assignDueDate}
-                    onChange={setAssignDueDate}
-                    placeholder="DD/MM/YYYY HH:mm"
-                    format="dd/mm/yyyy HH:mm"
-                  />
-                  <p className="text-[11px] text-slate-400 font-medium">Thời điểm hết hạn nộp bài rèn luyện</p>
-                </div>
+                {assignDateError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{assignDateError}</span>
+                  </div>
+                )}
               </div>
 
               {/* 5. Quy Chế Luyện Tập & Tráo Đề */}
@@ -5002,26 +5239,45 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
                       setEditConfigDateError(null);
                     }}
                     placeholder="DD/MM/YYYY HH:mm"
-                    format="dd/mm/yyyy HH:mm"
                   />
                   <p className="text-[11px] text-slate-400 font-medium">Thời điểm bài bắt đầu hiển thị</p>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" />
-                    <span>Đặt hạn làm bài</span>
-                  </label>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600" />
+                      <span>Đặt hạn làm bài</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={editConfigUnlimited}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setEditConfigUnlimited(checked);
+                          setEditConfigDateError(null);
+                          if (!checked && !editConfigDueDate) {
+                            setEditConfigDueDate(getFormattedDateTimeInput(7));
+                          }
+                        }}
+                        className="rounded text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
+                      />
+                      <span>Không giới hạn thời gian</span>
+                    </label>
+                  </div>
                   <DateTimePicker
-                    value={editConfigDueDate}
+                    disabled={editConfigUnlimited}
+                    value={editConfigUnlimited ? '' : editConfigDueDate}
                     onChange={(val) => {
                       setEditConfigDueDate(val);
                       setEditConfigDateError(null);
                     }}
-                    placeholder="DD/MM/YYYY HH:mm"
-                    format="dd/mm/yyyy HH:mm"
+                    placeholder={editConfigUnlimited ? 'Không giới hạn thời gian' : 'DD/MM/YYYY HH:mm'}
                   />
-                  <p className="text-[11px] text-slate-400 font-medium">Thời điểm hết hạn nộp bài</p>
+                  <p className="text-[11px] text-slate-400 font-medium">
+                    {editConfigUnlimited ? 'Bài tập mở không giới hạn thời gian' : 'Thời điểm hết hạn nộp bài (giờ Việt Nam)'}
+                  </p>
                 </div>
               </div>
 
@@ -5403,7 +5659,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
                                         )}
                                       </td>
                                       <td className="py-2.5 px-3 text-slate-600 font-medium text-[11px]">
-                                        {docItem.dueDate || '-'}
+                                        {docItem.isUnlimited ? 'Không giới hạn thời gian' : formatDateTimeVN(docItem.dueDate, 'Không giới hạn thời gian')}
                                       </td>
                                     </tr>
                                   );
@@ -5448,6 +5704,275 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
                 type="button"
                 onClick={() => setIsScanDuplicatesModalOpen(false)}
                 className="px-6 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-900 text-white transition-all cursor-pointer"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: RÀ SOÁT & CHUẨN HÓA HẠN NỘP DỮ LIỆU CŨ (XEM TRƯỚC + XÁC NHẬN TỪNG DÒNG) */}
+      {isDeadlineAuditOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-6xl w-full shadow-2xl border border-slate-200 overflow-hidden my-6 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="p-5 bg-gradient-to-r from-indigo-900 via-indigo-800 to-indigo-900 text-white flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20">
+                  <Clock className="w-5 h-5 text-amber-300" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-white font-heading tracking-wide">
+                    Rà Soát & Chuẩn Hóa Hạn Nộp (Xem Trước & Xác Nhận Từng Dòng)
+                  </h3>
+                  <p className="text-xs text-indigo-200 font-medium">
+                    Quét chỉ đọc toàn bộ Bài tập, Đề kiểm tra & Bài giảng E-Learning • Tự động sao lưu JSON trước khi ghi
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDeadlineAuditOpen(false)}
+                className="p-2 rounded-xl hover:bg-white/10 text-white/80 hover:text-white transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 sm:p-6 space-y-4 max-h-[76vh] overflow-y-auto">
+              {/* Top Controls & Summary */}
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="px-3 py-1 rounded-full bg-white border border-slate-200 font-bold text-slate-700">
+                    Tổng quét: <strong>{deadlineAuditRows.length}</strong> bản ghi
+                  </span>
+                  <span className="px-3 py-1 rounded-full bg-amber-50 border border-amber-200 font-bold text-amber-800">
+                    Cần chuẩn hóa: <strong>{deadlineAuditRows.filter((r) => r.needsFix).length}</strong> bản ghi
+                  </span>
+                  <div className="flex items-center bg-white border border-slate-200 rounded-xl p-0.5 ml-1">
+                    <button
+                      type="button"
+                      onClick={() => setDeadlineAuditFilter('issues')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                        deadlineAuditFilter === 'issues' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Chỉ mục cần sửa
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeadlineAuditFilter('all')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                        deadlineAuditFilter === 'all' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Tất cả
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadDeadlineBackupJson(
+                        {
+                          exportedAt: new Date().toISOString(),
+                          scannedRecords: deadlineAuditRows.map((r) => ({
+                            collectionName: r.collectionName,
+                            docId: r.docId,
+                            rawStartValue: r.rawStartValue ?? null,
+                            rawDueValue: r.rawDueValue ?? null,
+                            rawDocSnapshot: r.rawDocSnapshot,
+                          })),
+                          savedSnapshots: getSavedDeadlineBackups(),
+                        },
+                        'sao-luu-han-nop-firestore'
+                      )
+                    }
+                    className="px-3 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Tải bản sao lưu JSON</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleOpenDeadlineAudit}
+                    disabled={isScanningDeadlines}
+                    className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isScanningDeadlines ? 'animate-spin' : ''}`} />
+                    <span>Quét lại</span>
+                  </button>
+                </div>
+              </div>
+
+              {deadlineAuditError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{deadlineAuditError}</span>
+                </div>
+              )}
+
+              {isScanningDeadlines ? (
+                <div className="py-14 text-center space-y-2 text-xs text-slate-500 font-bold">
+                  <RefreshCw className="w-7 h-7 text-indigo-600 animate-spin mx-auto" />
+                  <p>Đang quét chỉ đọc dữ liệu Bài tập, Đề kiểm tra & Bài giảng E-Learning trên Firestore...</p>
+                </div>
+              ) : (() => {
+                const displayRows =
+                  deadlineAuditFilter === 'issues'
+                    ? deadlineAuditRows.filter((r) => r.needsFix)
+                    : deadlineAuditRows;
+
+                if (displayRows.length === 0) {
+                  return (
+                    <div className="py-12 text-center space-y-2 bg-emerald-50/50 rounded-2xl border border-emerald-200">
+                      <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto" />
+                      <h4 className="text-sm font-extrabold text-emerald-900">
+                        Không phát hiện bản ghi hạn nộp nào có lỗi định dạng hoặc xung đột!
+                      </h4>
+                      <p className="text-xs text-emerald-700">
+                        Tất cả bản ghi đang dùng chuẩn ngày giờ thống nhất hoặc đã được chuẩn hóa.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-600 font-extrabold uppercase text-[11px] border-b border-slate-200">
+                          <th className="py-3 px-3">Tên bài / Mã</th>
+                          <th className="py-3 px-3 whitespace-nowrap">Loại / Lớp</th>
+                          <th className="py-3 px-3">Hạn đang lưu (Raw DB)</th>
+                          <th className="py-3 px-3">Vấn đề phát hiện</th>
+                          <th className="py-3 px-3">Hạn đề xuất chuẩn hóa</th>
+                          <th className="py-3 px-3 text-center whitespace-nowrap">Xác nhận</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {displayRows.map((row) => {
+                          const key = `${row.collectionName}::${row.docId}`;
+                          const ov = auditRowOverrides[key] || {
+                            startIso: row.suggestedStartIso,
+                            dueIso: row.suggestedDueIso,
+                            unlimited: row.suggestedUnlimited,
+                          };
+                          const isFixed = Boolean(fixedAuditKeys[key]);
+                          const isBusy = confirmingAuditKey === key;
+
+                          return (
+                            <tr key={key} className={isFixed ? 'bg-emerald-50/40' : row.needsFix ? 'bg-amber-50/25' : ''}>
+                              <td className="py-3 px-3 max-w-[220px]">
+                                <div className="font-bold text-slate-900 leading-snug">{row.title}</div>
+                                <div className="text-[10px] font-mono text-slate-400 truncate mt-0.5">{row.docId}</div>
+                              </td>
+                              <td className="py-3 px-3 whitespace-nowrap">
+                                <div className="font-bold text-indigo-800">{row.typeLabel}</div>
+                                <span className="inline-block mt-0.5 px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-bold text-[10px]">
+                                  {row.targetClass}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3">
+                                <div className="font-mono text-[11px] font-bold text-slate-800">{row.rawDueDisplay}</div>
+                                <div className="text-[10px] text-slate-500">
+                                  Kiểu: <span className="font-mono">{row.rawDueType}</span> • Mở: {row.rawStartDisplay}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 max-w-[240px]">
+                                {row.issueDescriptions.length === 0 ? (
+                                  <span className="inline-flex items-center gap-1 text-emerald-700 font-bold text-[11px]">
+                                    <CheckCircle2 className="w-3.5 h-3.5" /> Đạt chuẩn ISO / Không giới hạn
+                                  </span>
+                                ) : (
+                                  <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-amber-900 font-medium">
+                                    {row.issueDescriptions.map((desc, idx) => (
+                                      <li key={idx}>{desc}</li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 min-w-[240px] space-y-1.5">
+                                <label className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 cursor-pointer select-none">
+                                  <input
+                                    type="checkbox"
+                                    disabled={isFixed || isBusy}
+                                    checked={ov.unlimited}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setAuditRowOverrides((prev) => ({
+                                        ...prev,
+                                        [key]: {
+                                          ...ov,
+                                          unlimited: checked,
+                                          dueIso: !checked && !ov.dueIso ? getFormattedDateTimeInput(7) : ov.dueIso,
+                                        },
+                                      }));
+                                    }}
+                                    className="rounded text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5"
+                                  />
+                                  <span>Không giới hạn thời gian</span>
+                                </label>
+                                {!ov.unlimited ? (
+                                  <DateTimePicker
+                                    disabled={isFixed || isBusy}
+                                    value={ov.dueIso}
+                                    onChange={(val) => {
+                                      setAuditRowOverrides((prev) => ({
+                                        ...prev,
+                                        [key]: { ...ov, dueIso: val },
+                                      }));
+                                    }}
+                                    placeholder="DD/MM/YYYY HH:mm"
+                                  />
+                                ) : (
+                                  <div className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
+                                    Đề xuất: Không giới hạn thời gian
+                                  </div>
+                                )}
+                                <div className="text-[10px] text-slate-500">
+                                  Hiển thị chuẩn: <strong>{ov.unlimited ? 'Không giới hạn thời gian' : formatDateTimeVN(ov.dueIso, '-')}</strong>
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 text-center whitespace-nowrap">
+                                {isFixed ? (
+                                  <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-800 text-[11px] font-extrabold">
+                                    <Check className="w-3.5 h-3.5" /> Đã lưu
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={isBusy}
+                                    onClick={() => handleConfirmAuditRowFix(row)}
+                                    className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-extrabold cursor-pointer transition-all disabled:opacity-50"
+                                  >
+                                    {isBusy ? 'Đang lưu...' : 'Xác nhận sửa dòng'}
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <span className="text-[11px] text-slate-500 font-medium">
+                🔒 Chỉ cập nhật trường thời gian khi giáo viên xác nhận từng dòng. Toàn bộ bài nộp, điểm số và Xu của học sinh được giữ nguyên 100%.
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsDeadlineAuditOpen(false)}
+                className="px-5 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-900 text-white transition-all cursor-pointer"
               >
                 Đóng
               </button>

@@ -19,13 +19,17 @@ import {
   Info,
   HelpCircle,
   Plus,
-  AlertCircle
+  AlertCircle,
+  Clock,
+  AlertTriangle
 } from 'lucide-react';
 import { QuestionItem, CognitiveLevel } from '../../types';
 import { SUBJECTS, GRADES, CLASSES_BY_GRADE, QUESTION_TYPES, getQuestionTypeLabel, matchesQuestionType } from '../../lib/constants';
 import { useClassesList, extractGradeDigit } from '../../services/classStorageService';
 import { getLocalCachedQuestions, subscribeToQuestionsFromFirestore } from '../../services/questionStorageService';
 import { isQuestionMatchingGrade } from './QuestionBankModule';
+import { DateTimePicker } from '../common/DateTimePicker';
+import { toIsoDateTimeString } from '../../utils/dateTimeUtils';
 
 export type TargetContext = 'assignment' | 'elaborate' | 'apply' | 'assessment' | 'game' | 'default';
 
@@ -46,7 +50,9 @@ interface UseQuestionBankModalProps {
     subject: string;
     grade: string;
     classes: string[];
+    startDate?: string;
     dueDate?: string;
+    isUnlimited?: boolean;
     maxAttempts?: string;
     shuffleQuestions?: boolean;
     shuffleOptions?: boolean;
@@ -114,6 +120,10 @@ export const UseQuestionBankModal: React.FC<UseQuestionBankModalProps> = ({
   const [levelFilter, setLevelFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [questionCount, setQuestionCount] = useState(10);
+  const [assignStartDateObj, setAssignStartDateObj] = useState<Date | null>(() => new Date());
+  const [assignDueDateObj, setAssignDueDateObj] = useState<Date | null>(null);
+  const [assignUnlimited, setAssignUnlimited] = useState<boolean>(true);
+  const [dateError, setDateError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const isSubmittingRef = React.useRef<boolean>(false);
 
@@ -122,6 +132,10 @@ export const UseQuestionBankModal: React.FC<UseQuestionBankModalProps> = ({
     if (isOpen) {
       setSelectedClasses([]);
       setClassError(null);
+      setDateError(null);
+      setAssignStartDateObj(new Date());
+      setAssignDueDateObj(null);
+      setAssignUnlimited(true);
       setActiveTab(1);
       setSelectedQuestionIds([]);
       if (initialTitle) {
@@ -134,6 +148,7 @@ export const UseQuestionBankModal: React.FC<UseQuestionBankModalProps> = ({
     } else {
       setSelectedClasses([]);
       setClassError(null);
+      setDateError(null);
       setSelectedQuestionIds([]);
     }
   }, [isOpen, initialTitle, initialSubject, initialGrade, isGameMode]);
@@ -385,6 +400,30 @@ export const UseQuestionBankModal: React.FC<UseQuestionBankModalProps> = ({
       return;
     }
 
+    const startDateVal = assignStartDateObj || new Date();
+    if (!assignUnlimited) {
+      if (!assignDueDateObj) {
+        setDateError('Vui lòng chọn hạn nộp bài hoặc tích chọn "Không giới hạn thời gian".');
+        showToast('⚠️ Vui lòng chọn hạn nộp bài hợp lệ!');
+        setActiveTab(1);
+        return;
+      }
+      const nowMs = Date.now();
+      if (assignDueDateObj.getTime() <= nowMs) {
+        setDateError('Hạn nộp bài phải ở tương lai (sau thời điểm hiện tại)!');
+        showToast('⚠️ Hạn nộp bài phải sau thời điểm hiện tại!');
+        setActiveTab(1);
+        return;
+      }
+      if (assignDueDateObj.getTime() <= startDateVal.getTime()) {
+        setDateError('Hạn nộp bài phải sau thời điểm mở bài!');
+        showToast('⚠️ Hạn nộp bài phải sau thời điểm mở bài!');
+        setActiveTab(1);
+        return;
+      }
+    }
+    setDateError(null);
+
     if (selectedQuestions.length === 0) {
       showToast('Vui lòng chọn ít nhất 1 câu hỏi từ ngân hàng trước khi giao bài!');
       setActiveTab(2);
@@ -395,12 +434,8 @@ export const UseQuestionBankModal: React.FC<UseQuestionBankModalProps> = ({
       isSubmittingRef.current = true;
       setIsSubmitting(true);
 
-      const twoWeeksLater = new Date();
-      twoWeeksLater.setDate(twoWeeksLater.getDate() + 14);
-      const yyyy = twoWeeksLater.getFullYear();
-      const mm = String(twoWeeksLater.getMonth() + 1).padStart(2, '0');
-      const dd = String(twoWeeksLater.getDate()).padStart(2, '0');
-      const dynamicDueDate = `${yyyy}-${mm}-${dd}T23:59`;
+      const isoStart = toIsoDateTimeString(startDateVal);
+      const isoDue = assignUnlimited ? '' : toIsoDateTimeString(assignDueDateObj);
 
       if (onAssignHomework) {
         onAssignHomework({
@@ -408,7 +443,9 @@ export const UseQuestionBankModal: React.FC<UseQuestionBankModalProps> = ({
           subject,
           grade,
           classes: uniqueClasses,
-          dueDate: dynamicDueDate,
+          startDate: isoStart,
+          dueDate: isoDue,
+          isUnlimited: assignUnlimited,
           questionCount,
           selectedQuestions,
         });
@@ -937,6 +974,71 @@ export const UseQuestionBankModal: React.FC<UseQuestionBankModalProps> = ({
                     className="w-full sm:w-64 px-3.5 py-2.5 text-xs font-medium rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
                   />
                 </div>
+
+                {/* Thời gian mở bài & Hạn nộp bài (chế độ giao bài tập) */}
+                {!isLessonMode && !isGameMode && (
+                  <div className="pt-3 border-t border-slate-100 space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-teal-600" />
+                        <span>Thời điểm mở bài &amp; Hạn nộp bài</span>
+                      </span>
+                      <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={assignUnlimited}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setAssignUnlimited(checked);
+                            if (checked) setAssignDueDateObj(null);
+                            setDateError(null);
+                          }}
+                          className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500 cursor-pointer"
+                        />
+                        <span>Không giới hạn thời gian</span>
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-bold text-slate-500 uppercase">
+                          Thời điểm mở bài
+                        </label>
+                        <DateTimePicker
+                          value={assignStartDateObj}
+                          onDateChange={(d) => {
+                            setAssignStartDateObj(d || new Date());
+                            setDateError(null);
+                          }}
+                          placeholder="DD/MM/YYYY HH:mm"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-bold text-slate-500 uppercase">
+                          Hạn nộp bài
+                        </label>
+                        <DateTimePicker
+                          disabled={assignUnlimited}
+                          value={assignUnlimited ? null : assignDueDateObj}
+                          onDateChange={(d) => {
+                            setAssignDueDateObj(d);
+                            setAssignUnlimited(d === null);
+                            setDateError(null);
+                          }}
+                          placeholder="Chọn hạn nộp (DD/MM/YYYY HH:mm)"
+                        />
+                      </div>
+                    </div>
+
+                    {dateError && (
+                      <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700 flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>{dateError}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Info Tip Banner */}
