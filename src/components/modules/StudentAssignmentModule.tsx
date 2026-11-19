@@ -37,7 +37,7 @@ import {
   getCurrentStudentSession
 } from '../../services/studentSessionService';
 import { studentResultService } from '../../services/studentResultService';
-import { getRecordType } from '../../services/studentCode';
+import { getRecordType, normalizeStudentCode } from '../../services/studentCode';
 import {
   subscribeToAssignmentsFromFirestore,
   getAssignmentsFromFirestore,
@@ -45,6 +45,7 @@ import {
 } from '../../services/assignmentStorageService';
 import { syncAssignmentQuestions } from '../../services/assignmentSyncService';
 import { formatScore, isSubjectWithScore, getQualitativeLevel, getQualitativeLabel, getCurrentSubmissionTimestamp, formatSubmissionDateTime, parseScoreValue, calculateExamScore } from '../../utils/scoreUtils';
+import { sanitizeForFirestore, normalizeSubmissionAnswers, withFirestoreTimeout } from '../../utils/firestoreSanitizer';
 import { db } from '../../services/firebase';
 import { doc, getDoc, setDoc, runTransaction, onSnapshot } from 'firebase/firestore';
 
@@ -221,12 +222,12 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
 
   const studentSession = getCurrentStudentSession();
   const effectiveInfo = getEffectiveStudentClassAndGrade();
-  const effectiveUserId = getAuthenticStudentCode(
+  const effectiveUserId = normalizeStudentCode(getAuthenticStudentCode(
     studentSession, 
     currentUserId || studentId, 
     effectiveInfo.studentClass, 
     currentUserName || studentName || effectiveInfo.studentName
-  );
+  ));
   const effectiveUserName = studentSession?.name || studentSession?.fullName || currentUserName || studentName || effectiveInfo.studentName || 'Học sinh';
 
   const [activeTab, setActiveTab] = useState<'todo' | 'history'>('todo');
@@ -359,19 +360,16 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
         const matchedSub = as.submissions.find((s: any) => {
           if (!s) return false;
           const candidates = [
-            s.studentId,
             s.studentCode,
             s.maHs,
             s.code,
-            s.userId,
-            s.studentName,
-            s.name
-          ].filter(Boolean).map(c => String(c).trim().toLowerCase());
+            s.studentId,
+            s.userId
+          ].filter(Boolean).map(c => normalizeStudentCode(String(c)).toLowerCase());
 
           const targetKeys = [
-            effectiveUserId.toLowerCase().trim(),
-            (studentId || '').toLowerCase().trim(),
-            (effectiveUserName || '').toLowerCase().trim()
+            normalizeStudentCode(effectiveUserId).toLowerCase(),
+            normalizeStudentCode(studentId || '').toLowerCase()
           ].filter(Boolean);
 
           return candidates.some(c => targetKeys.includes(c));
@@ -467,7 +465,7 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
     console.groupEnd();
   }, [assignments, assignmentHistory, effectiveUserName, effectiveUserId, studentClass, studentGrade]);
 
-  const handleAddNewSubmission = (newSub: {
+  const handleAddNewSubmission = async (newSub: {
     id: string;
     studentId?: string;
     title: string;
@@ -481,13 +479,16 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
     scoreNumber?: number;
     correctCount?: number;
     totalQuestions?: number;
+    alreadySyncedToFirestore?: boolean;
   }) => {
-    // Calculate correct answers
+    const authenticCode = normalizeStudentCode(newSub.studentId || effectiveUserId);
     const questions = newSub.assignment?.questions || [];
     const totalQuestions = Math.max(1, questions.length);
+    const { answers: normalizedAnswers, answersById } = normalizeSubmissionAnswers(newSub.answers, questions);
+
     let correctCount = 0;
     questions.forEach((q, idx) => {
-      const studentChoice = newSub.answers?.[idx];
+      const studentChoice = normalizedAnswers[String(idx)];
       if (checkQuestionCorrectLocal(q, studentChoice)) {
         correctCount++;
       }
@@ -496,61 +497,74 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
     const hasScore = isSubjectWithScore(newSub.subject || newSub.assignment?.subject);
     const calculatedScore = calculateExamScore(correctCount, totalQuestions);
 
-    let numScore = newSub.totalScore !== undefined && !isNaN(newSub.totalScore)
-      ? newSub.totalScore
-      : (newSub.scoreNumber !== undefined && !isNaN(newSub.scoreNumber) ? newSub.scoreNumber : parseScoreValue(newSub.score, correctCount, totalQuestions));
+    let numScore = newSub.totalScore !== undefined && Number.isFinite(Number(newSub.totalScore))
+      ? Number(newSub.totalScore)
+      : (newSub.scoreNumber !== undefined && Number.isFinite(Number(newSub.scoreNumber))
+        ? Number(newSub.scoreNumber)
+        : parseScoreValue(newSub.score, correctCount, totalQuestions));
 
-    if ((numScore === 0 || isNaN(numScore)) && correctCount > 0) {
-      numScore = calculatedScore;
+    if (!Number.isFinite(numScore) || (numScore === 0 && correctCount > 0)) {
+      numScore = Number.isFinite(calculatedScore) ? calculatedScore : 0;
     }
 
     const formattedScore = hasScore ? String(numScore) : (newSub.score || getQualitativeLabel(correctCount, totalQuestions));
+    const safeSubmittedTime = formatSubmissionDateTime(newSub.submittedTime || getCurrentSubmissionTimestamp());
+    const assignmentId = String(newSub.assignment?.id || newSub.id || '');
 
-    const subWithStudent: AssignmentSubmissionItem = { 
-      ...newSub, 
+    const subWithStudent: AssignmentSubmissionItem = sanitizeForFirestore({
+      ...newSub,
       recordType: 'assignment',
       type: 'assignment',
       submissionType: 'assignment',
-      studentId: effectiveUserId,
-      score: formattedScore
-    };
+      assignmentId,
+      studentId: authenticCode,
+      studentCode: authenticCode,
+      maHs: authenticCode,
+      score: formattedScore,
+      submittedTime: safeSubmittedTime,
+      answers: normalizedAnswers,
+      answersById,
+    });
+
     const newKey = getCanonicalAssignmentKey(subWithStudent);
     const remaining = assignmentHistory.filter(s => getCanonicalAssignmentKey(s) !== newKey);
     const updatedList = deduplicateAssignmentSubmissions([subWithStudent, ...remaining]);
     setAssignmentHistory(updatedList);
+
     try {
-      localStorage.setItem(`eduplay_student_submissions_${effectiveUserId}`, JSON.stringify(updatedList));
+      localStorage.setItem(`eduplay_student_submissions_${authenticCode}`, JSON.stringify(updatedList));
       window.dispatchEvent(new Event('eduplay_student_submissions_updated'));
     } catch (err) {
-      console.error('Error saving student assignment submission:', err);
+      console.error('Error saving student assignment submission to localStorage:', err);
     }
 
-    const submissionRecord = {
-      id: newSub.id || `sub-${Date.now()}`,
+    const submissionRecord = sanitizeForFirestore({
+      id: newSub.id || `${authenticCode}_${assignmentId}`,
       recordType: 'assignment' as const,
-      studentId: effectiveUserId,
-      studentCode: effectiveUserId,
-      maHs: effectiveUserId,
-      code: effectiveUserId,
+      assignmentId,
+      studentId: authenticCode,
+      studentCode: authenticCode,
+      maHs: authenticCode,
+      code: authenticCode,
       studentName: effectiveUserName || 'Học sinh',
       score: numScore,
       totalScore: numScore,
       correctCount,
       totalQuestions,
-      submittedAt: formatSubmissionDateTime(newSub.submittedTime || getCurrentSubmissionTimestamp()),
-      submittedTime: formatSubmissionDateTime(newSub.submittedTime || getCurrentSubmissionTimestamp()),
-      answers: newSub.answers,
+      submittedAt: safeSubmittedTime,
+      submittedTime: safeSubmittedTime,
+      answers: normalizedAnswers,
+      answersById,
       status: 'submitted' as const
-    };
+    });
 
     // Update parent state if available
     if (onSaveAssignment && newSub.assignment) {
       const existingSubs = Array.isArray(newSub.assignment.submissions) ? [...newSub.assignment.submissions] : [];
-      const filtered = existingSubs.filter((s: any) => 
-        (s.studentId || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
-        (s.studentCode || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
-        (s.maHs || '').toLowerCase() !== effectiveUserId.toLowerCase()
-      );
+      const filtered = existingSubs.filter((s: any) => {
+        const sCode = normalizeStudentCode(s?.studentCode || s?.maHs || s?.studentId || s?.code || '');
+        return sCode !== authenticCode;
+      });
       filtered.push(submissionRecord as any);
       const updatedAssignment: HomeworkAssignment = {
         ...newSub.assignment,
@@ -560,79 +574,101 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
       onSaveAssignment(updatedAssignment);
     }
 
-    // Save directly to Firestore for instant real-time sync across teachers & students using runTransaction (Atomic operation)
-    if (db && newSub.assignment?.id) {
-      const assignmentId = newSub.assignment.id;
+    // Nếu StudentExamModule đã đồng bộ trực tiếp lên Firestore thì không lặp lại transaction gây xung đột
+    if (!newSub.alreadySyncedToFirestore && db && assignmentId) {
       const assignRef = doc(db, 'assignments', assignmentId);
-      const subDocRef = doc(db, 'assignments', assignmentId, 'submissions', effectiveUserId);
-
-      runTransaction(db, async (transaction) => {
-        const assignSnap = await transaction.get(assignRef);
-        let existingSubs: any[] = [];
-        if (assignSnap.exists()) {
-          const currentData = assignSnap.data();
-          existingSubs = Array.isArray(currentData.submissions) ? [...currentData.submissions] : [];
-        }
-
-        // Filter out previous submission by same student to ensure deduplication
-        const filtered = existingSubs.filter((s: any) => 
-          (s.studentId || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
-          (s.studentCode || '').toLowerCase() !== effectiveUserId.toLowerCase() &&
-          (s.maHs || '').toLowerCase() !== effectiveUserId.toLowerCase()
-        );
-
-        filtered.push(submissionRecord);
-
-        // Calculate unique submitted student IDs and unique count
-        const uniqueStudentKeys = new Set(
-          filtered.map((s: any) => (s.studentCode || s.maHs || s.studentId || '').trim().toLowerCase()).filter(Boolean)
-        );
-        const count = uniqueStudentKeys.size;
-        const submittedIdsList = Array.from(uniqueStudentKeys);
-
-        // Atomic write 1: Sub-collection detail submission document
-        transaction.set(subDocRef, {
-          ...submissionRecord,
-          assignmentId,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-
-        // Atomic write 2: Parent assignment document summary & array update
-        transaction.set(assignRef, {
-          submissions: filtered,
-          submittedIds: submittedIdsList,
-          submittedCount: count,
-          completedCount: count,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-      }).then(() => {
-        console.log(`✅ [Transaction Nộp Bài] Bài tập ${assignmentId} đã được lưu nguyên khối (Subcollection & Master Doc) cho HS ${effectiveUserName} (${effectiveUserId})`);
-      }).catch(e => {
-        console.warn('❌ [Transaction Nộp Bài Error]:', e);
-      });
+      const subDocRef = doc(db, 'assignments', assignmentId, 'submissions', authenticCode);
 
       try {
-        studentResultService.saveAssignmentResult(effectiveUserId, {
-          assignmentId,
-          score: numScore,
-          maxScore: 10,
-          submittedAt: formatSubmissionDateTime(newSub.submittedTime || getCurrentSubmissionTimestamp()),
-          answers: newSub.answers,
-          keepAttempts: 'last'
-        });
-      } catch {}
+        await withFirestoreTimeout(
+          runTransaction(db, async (transaction) => {
+            const assignSnap = await transaction.get(assignRef);
+            let existingSubs: any[] = [];
+            if (assignSnap.exists()) {
+              const currentData = assignSnap.data();
+              existingSubs = Array.isArray(currentData.submissions) ? [...currentData.submissions] : [];
+            }
+
+            const filtered = existingSubs
+              .filter((s: any) => {
+                const sCode = normalizeStudentCode(s?.studentCode || s?.maHs || s?.studentId || s?.code || '');
+                return sCode !== authenticCode;
+              })
+              .map((s: any) => sanitizeForFirestore(s));
+
+            filtered.push(submissionRecord);
+
+            const uniqueStudentKeys = new Set(
+              filtered
+                .map((s: any) => normalizeStudentCode(s?.studentCode || s?.maHs || s?.studentId || ''))
+                .filter(Boolean)
+            );
+            const count = uniqueStudentKeys.size;
+            const submittedIdsList = Array.from(uniqueStudentKeys);
+
+            transaction.set(subDocRef, sanitizeForFirestore({
+              ...submissionRecord,
+              assignmentId,
+              updatedAt: new Date().toISOString()
+            }), { merge: true });
+
+            transaction.set(assignRef, sanitizeForFirestore({
+              submissions: filtered,
+              submittedIds: submittedIdsList,
+              submittedCount: count,
+              completedCount: count,
+              updatedAt: new Date().toISOString()
+            }), { merge: true });
+          }),
+          10000,
+          'StudentAssignmentModule.runTransaction'
+        );
+      } catch (e) {
+        console.warn('⚠️ [Transaction Nộp Bài] Lỗi/Timeout, thử lưu trực tiếp subcollection:', e);
+        try {
+          await withFirestoreTimeout(
+            setDoc(subDocRef, sanitizeForFirestore({
+              ...submissionRecord,
+              assignmentId,
+              updatedAt: new Date().toISOString()
+            }), { merge: true }),
+            8000,
+            'StudentAssignmentModule.fallbackSetDoc'
+          );
+        } catch (fallbackErr) {
+          console.warn('⚠️ [Fallback setDoc Nộp Bài] Đã lưu dự phòng LocalStorage:', fallbackErr);
+        }
+      }
+
+      try {
+        await withFirestoreTimeout(
+          studentResultService.saveAssignmentResult(authenticCode, {
+            assignmentId,
+            score: numScore,
+            maxScore: 10,
+            submittedAt: safeSubmittedTime,
+            answers: normalizedAnswers,
+            keepAttempts: 'last'
+          }),
+          8000,
+          'StudentAssignmentModule.saveAssignmentResult'
+        );
+      } catch (resErr) {
+        console.warn('⚠️ Lỗi cập nhật student_results (đã lưu dự phòng LocalStorage):', resErr);
+      }
     }
 
-    // Automatic reward calculation (+10 Xu / +5 EXP, bonus +5 Xu if >=80% correct, first-time only)
-    awardAssignmentReward(
-      effectiveUserId,
-      newSub.assignment.id,
-      newSub.title,
-      correctCount,
-      totalQuestions
-    );
-
-    showToast(`🎉 Nộp bài thành công! Điểm số của em: ${formattedScore}`);
+    if (!newSub.alreadySyncedToFirestore) {
+      awardAssignmentReward(
+        authenticCode,
+        assignmentId,
+        newSub.title,
+        correctCount,
+        totalQuestions,
+        numScore
+      );
+      showToast(`🎉 Nộp bài thành công! Điểm số của em: ${formattedScore}`);
+    }
   };
 
   // Phân loại dữ liệu độc lập: loại trừ các bài giảng E-Learning, lọc theo lớp học và khử trùng lặp triệt để
@@ -804,7 +840,7 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
           onSubmitted={(newSub) => {
             handleAddNewSubmission({
               id: newSub.id,
-              studentId: effectiveUserId,
+              studentId: newSub.studentId || effectiveUserId,
               title: newSub.title,
               subject: newSub.subject,
               rank: newSub.rank,
@@ -815,7 +851,8 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
               totalScore: (newSub as any).totalScore,
               scoreNumber: (newSub as any).scoreNumber,
               correctCount: (newSub as any).correctCount,
-              totalQuestions: (newSub as any).totalQuestions
+              totalQuestions: (newSub as any).totalQuestions,
+              alreadySyncedToFirestore: Boolean((newSub as any).alreadySyncedToFirestore)
             });
           }}
           isPreviewMode={isPreviewMode}
@@ -1056,13 +1093,12 @@ export const StudentAssignmentModule: React.FC<StudentAssignmentModuleProps> = (
                 const submissionsList = Array.isArray(as.submissions) ? as.submissions : [];
                 const directSubmission = submissionsList.find((s: any) => {
                   if (!s) return false;
-                  const sid = String(s.studentId || s.studentCode || s.maHs || s.code || '').trim().toLowerCase();
+                  const sid = normalizeStudentCode(String(s.studentCode || s.maHs || s.studentId || s.code || ''));
                   const targetKeys = [
-                    effectiveUserId.toLowerCase().trim(),
-                    (studentId || '').toLowerCase().trim(),
-                    (effectiveUserName || '').toLowerCase().trim()
+                    normalizeStudentCode(effectiveUserId),
+                    normalizeStudentCode(studentId || '')
                   ].filter(Boolean);
-                  return targetKeys.includes(sid);
+                  return Boolean(sid) && targetKeys.includes(sid);
                 });
 
                 const existingSub = matchingHistory[0] || (directSubmission ? {

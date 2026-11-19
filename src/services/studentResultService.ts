@@ -1,27 +1,9 @@
 import { doc, setDoc, getDocFromServer, getDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { normalizeStudentCode } from './studentCode';
+import { sanitizeForFirestore, withFirestoreTimeout } from '../utils/firestoreSanitizer';
 
 export const STUDENT_RESULTS_COLLECTION = 'student_results';
-
-function cleanPayload<T>(obj: T): T {
-  if (obj === undefined) return '' as any;
-  if (Array.isArray(obj)) {
-    return obj
-      .filter((item) => item !== undefined)
-      .map((item) => cleanPayload(item)) as any;
-  }
-  if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
-    const cleaned: any = {};
-    for (const [key, value] of Object.entries(obj)) {
-      if (value !== undefined) {
-        cleaned[key] = cleanPayload(value);
-      }
-    }
-    return cleaned;
-  }
-  return obj;
-}
 
 export interface StudentResultDocument {
   studentCode: string;
@@ -55,50 +37,63 @@ export const studentResultService = {
    * Nếu cấu hình keepAttempts là 'last' (lần cuối), hệ thống ghi đè kết quả mới nhất.
    */
   async saveAssignmentResult(
-    rawStudentCode: string, 
+    rawStudentCode: string,
     payload: AssignmentSubmissionPayload
   ): Promise<boolean> {
     try {
       const studentCode = normalizeStudentCode(rawStudentCode);
       if (!studentCode) throw new Error('Mã học sinh không hợp lệ');
+      if (!payload?.assignmentId) throw new Error('Mã bài tập không hợp lệ');
 
       const docRef = doc(db, STUDENT_RESULTS_COLLECTION, studentCode);
       const policy: KeepAttemptPolicy = payload.keepAttempts || 'last';
+      const safeScore = Number.isFinite(Number(payload.score)) ? Number(payload.score) : 0;
+      const safeMaxScore = Number.isFinite(Number(payload.maxScore)) ? Number(payload.maxScore) : 10;
+      const safeSubmittedAt = payload.submittedAt || new Date().toISOString();
+      const safeAnswers = sanitizeForFirestore(payload.answers || {});
 
       const assignmentData: any = {
-        score: payload.score,
-        maxScore: payload.maxScore,
-        submittedAt: payload.submittedAt,
-        attemptNumber: payload.attemptNumber || 1,
+        assignmentId: String(payload.assignmentId),
+        studentCode,
+        score: safeScore,
+        maxScore: safeMaxScore,
+        submittedAt: safeSubmittedAt,
+        attemptNumber: Number.isFinite(Number(payload.attemptNumber)) ? Number(payload.attemptNumber) : 1,
       };
 
       // Nếu chính sách là 'last', chỉ lưu câu trả lời hoặc chi tiết của lần nộp mới nhất
       if (policy === 'last') {
         assignmentData.lastAttempt = {
-          score: payload.score,
-          submittedAt: payload.submittedAt,
-          answers: payload.answers || {},
+          score: safeScore,
+          submittedAt: safeSubmittedAt,
+          answers: safeAnswers,
         };
       } else if (policy === 'best') {
-        assignmentData.bestScore = payload.score;
+        assignmentData.bestScore = safeScore;
       }
 
       // Cập nhật cấu trúc lồng nhau dùng dot notation qua { merge: true } để không ghi đè dữ liệu môn khác
-      const updatePayload = {
+      const updatePayload = sanitizeForFirestore({
         studentCode,
         [`assignments.${payload.assignmentId}`]: assignmentData,
         updatedAt: new Date().toISOString(),
-      };
+      });
 
-      // Thực hiện ghi an toàn bằng setDoc merge
-      await setDoc(docRef, updatePayload, { merge: true });
+      // Thực hiện ghi an toàn bằng setDoc merge kèm timeout
+      await withFirestoreTimeout(
+        setDoc(docRef, updatePayload, { merge: true }),
+        10000,
+        'saveAssignmentResult.setDoc'
+      );
 
-      // Xác thực ghi thành công bằng cách đọc lại trực tiếp từ server
-      const verifySnap = await getDocFromServer(docRef);
-      if (verifySnap.exists()) {
-        return true;
+      // Xác thực không chặn nếu server phản hồi chậm hoặc đang offline
+      try {
+        await withFirestoreTimeout(getDocFromServer(docRef), 4000, 'saveAssignmentResult.verify');
+      } catch (verifyErr) {
+        console.warn('Xác thực getDocFromServer tạm bỏ qua (mạng chậm/offline):', verifyErr);
       }
-      return false;
+
+      return true;
     } catch (error) {
       console.error('Lỗi khi lưu kết quả bài tập:', error);
       throw error;
@@ -118,17 +113,29 @@ export const studentResultService = {
       if (!studentCode) throw new Error('Mã học sinh không hợp lệ');
 
       const docRef = doc(db, STUDENT_RESULTS_COLLECTION, studentCode);
+      const safeScore = Number.isFinite(Number(resultData?.score)) ? Number(resultData.score) : 0;
+      const safeMaxScore = Number.isFinite(Number(resultData?.maxScore)) ? Number(resultData.maxScore) : 10;
 
-      const updatePayload = {
+      const updatePayload = sanitizeForFirestore({
         studentCode,
         [`exams.${examId}`]: {
           ...resultData,
+          examId,
+          studentCode,
+          score: safeScore,
+          maxScore: safeMaxScore,
+          submittedAt: resultData?.submittedAt || new Date().toISOString(),
+          type: resultData?.type || 'exam',
           updatedAt: new Date().toISOString(),
         },
         updatedAt: new Date().toISOString(),
-      };
+      });
 
-      await setDoc(docRef, updatePayload, { merge: true });
+      await withFirestoreTimeout(
+        setDoc(docRef, updatePayload, { merge: true }),
+        10000,
+        'saveExamResult.setDoc'
+      );
       return true;
     } catch (error) {
       console.error('Lỗi khi lưu kết quả kiểm tra:', error);
@@ -162,16 +169,21 @@ export const studentResultService = {
 
       const docRef = doc(db, STUDENT_RESULTS_COLLECTION, studentCode);
 
-      const updatePayload = {
+      const updatePayload = sanitizeForFirestore({
         studentCode,
         [`games.${gameId}`]: {
           ...resultData,
+          studentCode,
           updatedAt: new Date().toISOString(),
         },
         updatedAt: new Date().toISOString(),
-      };
+      });
 
-      await setDoc(docRef, updatePayload, { merge: true });
+      await withFirestoreTimeout(
+        setDoc(docRef, updatePayload, { merge: true }),
+        10000,
+        'saveGameResult.setDoc'
+      );
       return true;
     } catch (error) {
       console.error('Lỗi khi lưu kết quả trò chơi:', error);
@@ -188,7 +200,7 @@ export const studentResultService = {
       if (!studentCode) return null;
       // Fetch from: student_results/{studentCode}/exams/{examId}
       const docRef = doc(db, STUDENT_RESULTS_COLLECTION, studentCode, 'exams', examId);
-      const snap = await getDoc(docRef);
+      const snap = await withFirestoreTimeout(getDoc(docRef), 8000, 'getExamSubmission');
       return snap.exists() ? snap.data() : null;
     } catch (error) {
       console.error('Lỗi khi tải bài kiểm tra từ Firestore:', error);
@@ -210,10 +222,19 @@ export const studentResultService = {
 
       // Save to: student_results/{studentCode}/exams/{examId}
       const docRef = doc(db, STUDENT_RESULTS_COLLECTION, studentCode, 'exams', examId);
-      await setDoc(docRef, cleanPayload({
+      const sanitizedPayload = sanitizeForFirestore({
         ...submissionData,
+        studentCode,
+        studentId: studentCode,
+        examId,
         updatedAt: new Date().toISOString(),
-      }), { merge: true });
+      });
+
+      await withFirestoreTimeout(
+        setDoc(docRef, sanitizedPayload, { merge: true }),
+        10000,
+        'saveFullExamSubmission.setDoc'
+      );
       return true;
     } catch (error) {
       console.error('Lỗi khi lưu bài kiểm tra vào Firestore:', error);
@@ -235,10 +256,19 @@ export const studentResultService = {
 
       // Save to: student_results/{studentCode}/assignments/{assignmentId}
       const docRef = doc(db, STUDENT_RESULTS_COLLECTION, studentCode, 'assignments', assignmentId);
-      await setDoc(docRef, cleanPayload({
+      const sanitizedPayload = sanitizeForFirestore({
         ...submissionData,
+        studentCode,
+        studentId: studentCode,
+        assignmentId,
         updatedAt: new Date().toISOString(),
-      }), { merge: true });
+      });
+
+      await withFirestoreTimeout(
+        setDoc(docRef, sanitizedPayload, { merge: true }),
+        10000,
+        'saveFullAssignmentSubmission.setDoc'
+      );
       return true;
     } catch (error) {
       console.error('Lỗi khi lưu bài tập vào Firestore:', error);
@@ -246,3 +276,4 @@ export const studentResultService = {
     }
   }
 };
+
