@@ -21,7 +21,7 @@ export function getAuthenticStudentCode(
 ): string {
   const sess = session || getCurrentStudentSession();
   const rawClass = sess?.className || sess?.class || targetClass || 'Lớp 3C';
-  const cleanClass = rawClass.replace(/^Lớp\s*/i, '').trim().toUpperCase();
+  const cleanClass = normalizeClassKey(rawClass).toUpperCase() || '3C';
 
   // 1. Kiểm tra ngay nếu bất kỳ mã nào truyền vào đã theo đúng chuẩn [Lớp]26-27-[STT]
   const candCodes = [
@@ -158,15 +158,11 @@ export function getCurrentStudentSession(): any | null {
  */
 export function normalizeClassKey(cls?: string): string {
   if (!cls) return '';
-  return String(cls)
-    .trim()
-    .toLowerCase()
-    .replace(/^lớp\s*/i, '')
-    .replace(/^khối\s*/i, '')
-    .replace(/^cls[-_]?/i, '')
-    .replace(/^class[-_]?/i, '')
-    .replace(/^lop[-_]?/i, '')
-    .replace(/[-_\s]+/g, '');
+  let s = String(cls).trim().toLowerCase();
+  while (/^(lớp|lop|khối|khoi|cls|class)[\s:_-]*/i.test(s)) {
+    s = s.replace(/^(lớp|lop|khối|khoi|cls|class)[\s:_-]*/i, '').trim();
+  }
+  return s.replace(/[-_\s]+/g, '');
 }
 
 /**
@@ -215,8 +211,11 @@ export function getEffectiveStudentClassAndGrade(propClass?: string): {
     cls = 'Lớp 3D';
   }
 
-  // Đảm bảo có tiền tố "Lớp " nếu chỉ là "3D" hay "5C"
-  if (!cls.toLowerCase().startsWith('lớp') && !cls.toLowerCase().startsWith('khối')) {
+  // Chuẩn hóa đồng nhất về "Lớp 3C", không lặp tiền tố "Lớp LỚP"
+  const normKeyUpper = normalizeClassKey(cls).toUpperCase();
+  if (normKeyUpper && !cls.toLowerCase().startsWith('khối')) {
+    cls = `Lớp ${normKeyUpper}`;
+  } else if (!cls.toLowerCase().startsWith('lớp') && !cls.toLowerCase().startsWith('khối')) {
     cls = `Lớp ${cls}`;
   }
 

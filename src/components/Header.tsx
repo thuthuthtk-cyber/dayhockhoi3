@@ -13,16 +13,12 @@ import {
   Sliders,
   LogOut,
   LogIn,
-  Calendar,
-  ChevronDown,
-  AlertTriangle,
   Bell,
   CheckCheck,
   AlertCircle
 } from 'lucide-react';
 import { UserRole, LatencyTestResult } from '../types';
 import { APP_NAME, APP_SUBTITLE } from '../config/appConfig';
-import { useAcademicYear } from '../contexts/AcademicYearContext';
 import {
   getStoredApiKey,
   setStoredApiKey,
@@ -106,20 +102,6 @@ export const Header: React.FC<HeaderProps> = ({
     }
   }, []);
 
-  // Academic Period Context & Popover state
-  const {
-    selectedAcademicYear,
-    setSelectedAcademicYear,
-    selectedSemester,
-    setSelectedSemester,
-    availableYears
-  } = useAcademicYear();
-
-  const [isPeriodPopoverOpen, setIsPeriodPopoverOpen] = useState(false);
-  const [tempYear, setTempYear] = useState(selectedAcademicYear);
-  const [tempSemester, setTempSemester] = useState(selectedSemester);
-  const [yearWarningToast, setYearWarningToast] = useState<string | null>(null);
-
   // Notifications Popover & State
   const [isNotifPopoverOpen, setIsNotifPopoverOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -155,36 +137,6 @@ export const Header: React.FC<HeaderProps> = ({
   const handleMarkAllRead = async () => {
     await markAllNotificationsAsRead();
     refreshNotifications();
-  };
-
-  useEffect(() => {
-    if (isPeriodPopoverOpen) {
-      setTempYear(selectedAcademicYear);
-      setTempSemester(selectedSemester);
-      setYearWarningToast(null);
-    }
-  }, [isPeriodPopoverOpen, selectedAcademicYear, selectedSemester]);
-
-  const handleYearSelect = (yearValue: string) => {
-    if (yearValue === '2027-2028') {
-      setYearWarningToast("Admin chưa kết chuyển dữ liệu lên năm học mới. Hệ thống tạm thời giữ mặc định năm học 2026-2027.");
-      setTempYear('2026-2027');
-    } else {
-      setTempYear(yearValue);
-      setYearWarningToast(null);
-    }
-  };
-
-  const handleSaveAcademicPeriod = () => {
-    if (tempYear === '2027-2028') {
-      setYearWarningToast("Admin chưa kết chuyển dữ liệu lên năm học mới. Hệ thống tạm thời giữ mặc định năm học 2026-2027.");
-      setTempYear('2026-2027');
-      return;
-    }
-    setSelectedAcademicYear(tempYear);
-    setSelectedSemester(tempSemester);
-    setIsPeriodPopoverOpen(false);
-    setYearWarningToast(null);
   };
 
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(auth.currentUser);
@@ -446,7 +398,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Right Controls: Bell Notifications, Academic Period & API Key Config */}
+        {/* Right Controls: Bell Notifications & API Key Config */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
 
           {/* Intelligent AI Bell Notifications Button */}
@@ -534,117 +486,6 @@ export const Header: React.FC<HeaderProps> = ({
                         </div>
                       ))
                     )}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Academic Period Selector Button */}
-          <div className="relative">
-            <button
-              onClick={() => setIsPeriodPopoverOpen(!isPeriodPopoverOpen)}
-              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 text-[#4F46E5] border border-indigo-200 transition-all cursor-pointer shadow-xs"
-              title="Chọn Học Kỳ & Năm Học"
-            >
-              <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#4F46E5] shrink-0" />
-              <span>{selectedSemester} • {selectedAcademicYear}</span>
-              <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 transition-transform duration-200 ${isPeriodPopoverOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {/* Popover Dropdown */}
-            {isPeriodPopoverOpen && (
-              <>
-                <div
-                  className="fixed inset-0 z-40"
-                  onClick={() => setIsPeriodPopoverOpen(false)}
-                />
-                <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-xl border border-gray-200 z-50 p-4 animate-in fade-in zoom-in-95 duration-150">
-                  <div className="flex items-center justify-between pb-3 mb-3 border-b border-gray-100">
-                    <div className="flex items-center gap-2 font-bold text-xs text-gray-800">
-                      <Calendar className="w-4 h-4 text-[#4F46E5]" />
-                      <span>Chọn Học Kỳ & Năm Học</span>
-                    </div>
-                    <button
-                      onClick={() => setIsPeriodPopoverOpen(false)}
-                      className="text-gray-400 hover:text-gray-600 p-0.5 rounded-md hover:bg-gray-100 transition-colors cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  <div className="space-y-3 text-xs">
-                    {yearWarningToast && (
-                      <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 text-[11px] font-medium flex items-start gap-2 shadow-sm animate-in fade-in slide-in-from-top-1 duration-200">
-                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                        <div className="flex-1 leading-snug">
-                          {yearWarningToast}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setYearWarningToast(null)}
-                          className="text-amber-500 hover:text-amber-800 p-0.5 rounded cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    )}
-
-                    <div>
-                      <label className="block text-gray-600 font-semibold mb-1">
-                        Năm học
-                      </label>
-                      <select
-                        value={tempYear}
-                        onChange={(e) => handleYearSelect(e.target.value)}
-                        className="w-full px-2.5 py-1.5 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-50 text-gray-800 font-medium cursor-pointer"
-                      >
-                        {availableYears.map((year) => (
-                          <option key={year} value={year}>
-                            Năm học {year}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-gray-600 font-semibold mb-1">
-                        Học kỳ
-                      </label>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {['Học kỳ I', 'Học kỳ II', 'Cả năm'].map((sem) => (
-                          <button
-                            key={sem}
-                            type="button"
-                            onClick={() => setTempSemester(sem)}
-                            className={`py-1.5 px-2 text-[11px] font-semibold rounded-lg border text-center transition-all cursor-pointer ${
-                              tempSemester === sem
-                                ? 'bg-[#4F46E5] text-white border-[#4F46E5] shadow-xs'
-                                : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
-                            }`}
-                          >
-                            {sem}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
-                    <button
-                      type="button"
-                      onClick={() => setIsPeriodPopoverOpen(false)}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
-                    >
-                      Hủy
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveAcademicPeriod}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#4F46E5] hover:bg-[#4338CA] text-white transition-all shadow-xs cursor-pointer"
-                    >
-                      Áp dụng
-                    </button>
                   </div>
                 </div>
               </>
@@ -750,11 +591,10 @@ export const Header: React.FC<HeaderProps> = ({
                   disabled={activeRole !== 'admin'}
                   className="w-full px-3 py-2 text-xs rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-50 text-gray-900 font-mono disabled:opacity-75 disabled:cursor-not-allowed"
                 >
-                  <option value="">Tự động ưu tiên (Mặc định: gemini-2.0-flash / Đã nhớ)</option>
-                  <option value="gemini-2.0-flash">gemini-2.0-flash (Mô hình chuẩn - Ổn định & Nhanh)</option>
-                  <option value="gemini-1.5-flash-latest">gemini-1.5-flash-latest (Mô hình dự phòng)</option>
+                  <option value="">Tự động ưu tiên (Mặc định: gemini-4-hydrogen / Đã nhớ)</option>
+                  <option value="gemini-4-hydrogen">gemini-4-hydrogen (Mô hình chuẩn - Ổn định & Nhanh)</option>
                   <option value="gemini-2.5-flash">gemini-2.5-flash (Flash thế hệ mới)</option>
-                  <option value="gemini-flash-latest">gemini-flash-latest (Alias tự động)</option>
+                  <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Mô hình nhẹ, tốc độ cao)</option>
                 </select>
                 <p className="text-[11px] text-gray-400 mt-1">
                   Chỉ danh sách các mô hình sinh văn bản mới nhất. Lựa chọn này áp dụng cho toàn bộ tính năng AI.

@@ -1,5 +1,3 @@
-import { db } from './firebase';
-import { doc, getDoc } from 'firebase/firestore';
 import mammoth from 'mammoth';
 import { LatencyTestResult, Lesson5EPlan, QuestionItem } from '../types';
 import { extractCanonicalOrdering } from './questionStorageService';
@@ -12,11 +10,11 @@ const STORAGE_KEYS = [
   'gemini_api_key'
 ];
 
-export const DEFAULT_MODEL = 'gemini-3.8-flash';
+export const DEFAULT_MODEL = 'gemini-4-hydrogen';
 export const FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 export const GEMINI_MODEL = DEFAULT_MODEL;
 export const FALLBACK_GEMINI_MODELS = [
-  'gemini-3.8-flash',
+  'gemini-4-hydrogen',
   'gemini-2.5-flash',
   'gemini-3.1-flash-lite'
 ];
@@ -56,8 +54,16 @@ export function isTextOnlyGeminiModel(modelName: string): boolean {
     if (name.includes(kw)) return false;
   }
 
-  // Exclude legacy bison/gemini-1.0 models
-  if (name.startsWith('gemini-1.0') || name.startsWith('text-bison') || name.startsWith('chat-bison')) {
+  // Exclude legacy/deprecated models
+  if (
+    name.startsWith('gemini-1.0') ||
+    name.startsWith('gemini-1.5') ||
+    name.startsWith('gemini-2.0') ||
+    name === 'gemini-3.8-flash' ||
+    name === 'gemini-flash-latest' ||
+    name.startsWith('text-bison') ||
+    name.startsWith('chat-bison')
+  ) {
     return false;
   }
 
@@ -182,7 +188,7 @@ export function setStoredApiKey(key: string): void {
  * Discover models supported by the server backend.
  */
 export async function getAvailableGeminiModels(_apiKey?: string): Promise<string[]> {
-  const defaultFallback = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
+  const defaultFallback = ['gemini-4-hydrogen', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
   try {
     const response = await fetch('/api/gemini/models');
     const contentType = response.headers.get('content-type') || '';
@@ -219,42 +225,7 @@ export async function generateContentWithTimeout(
 }
 
 /**
- * Resolve Gemini API Key with priority
- */
-export async function resolveGeminiApiKey(customKey?: string): Promise<string> {
-  let apiKey = (customKey !== undefined ? customKey : getStoredApiKey())?.trim();
-  if (apiKey) return apiKey;
-
-  const localGlobalKey = getStoredGlobalApiKey();
-  if (localGlobalKey) return localGlobalKey;
-
-  try {
-    if (db) {
-      const docRef = doc(db, 'settings', 'ai_config');
-      const docSnap = await getDoc(docRef);
-      if (docSnap && docSnap.exists()) {
-        const data = docSnap.data() as any;
-        apiKey = (data?.globalApiKey || data?.apiKey || '')?.trim();
-        if (apiKey) {
-          setStoredGlobalApiKey(apiKey);
-          return apiKey;
-        }
-      }
-    }
-  } catch (e: any) {
-    console.warn('Không thể đọc Global API Key từ Firestore:', e?.message || e);
-  }
-
-  const viteKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-  if (viteKey && typeof viteKey === 'string' && viteKey.trim()) {
-    return viteKey.trim();
-  }
-
-  return '';
-}
-
-/**
- * Test live Gemini connection and latency via server endpoint with direct client fallback for static hosts (Vercel)
+ * Test live Gemini connection and latency strictly via server endpoint
  */
 export async function testGeminiLatency(
   customKey?: string,
@@ -262,16 +233,15 @@ export async function testGeminiLatency(
 ): Promise<LatencyTestResult> {
   const startTime = Date.now();
   onProgress?.('Đang kết nối đến máy chủ AI (Gemini Server)...');
-  
+
   const adminModel = getAdminSelectedModel();
   const cachedModel = getCachedWorkingModel();
   const targetModel = (adminModel && isTextOnlyGeminiModel(adminModel))
     ? adminModel
     : ((cachedModel && isTextOnlyGeminiModel(cachedModel)) ? cachedModel : DEFAULT_MODEL);
-  
+
   const keyToTest = customKey || getStoredApiKey() || undefined;
 
-  // 1. Try server endpoint first
   try {
     const response = await fetch('/api/gemini/latency', {
       method: 'POST',
@@ -280,126 +250,55 @@ export async function testGeminiLatency(
     });
 
     const contentType = response.headers.get('content-type') || '';
-    if (response.ok && contentType.includes('application/json')) {
-      const text = await response.text();
-      if (text && text.trim()) {
-        try {
-          const data = JSON.parse(text);
-          if (data && data.status !== 'error') {
-            return {
-              latencyMs: data.latencyMs || (Date.now() - startTime),
-              status: 'online',
-              modelName: data.modelName || targetModel,
-              isCachedModel: true,
-              modelSource: 'default',
-              sourceLabel: 'máy chủ',
-              message: data.message || 'Kết nối máy chủ Gemini thành công!',
-            };
-          } else if (data && data.status === 'error') {
-            return {
-              latencyMs: data.latencyMs || (Date.now() - startTime),
-              status: 'error',
-              modelName: data.modelName || targetModel,
-              modelSource: 'default',
-              sourceLabel: 'máy chủ',
-              message: data.message || 'Lỗi kết nối máy chủ Gemini API',
-            };
-          }
-        } catch {
-          // Proceed to client fallback
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('Server latency endpoint unavailable, using direct client-side fallback:', err);
-  }
-
-  // 2. Direct client-side test fallback (for Vercel or when server endpoint returns HTML / non-JSON)
-  onProgress?.('Đang kết nối trực tiếp đến Google Gemini API...');
-  const resolvedKey = await resolveGeminiApiKey(keyToTest);
-  if (!resolvedKey) {
-    return {
-      latencyMs: Date.now() - startTime,
-      status: 'error',
-      modelName: targetModel,
-      modelSource: 'default',
-      sourceLabel: 'máy chủ',
-      message: 'Chưa cấu hình API Key. Vui lòng nhập Personal API Key hoặc lưu Global API Key.',
-    };
-  }
-
-  try {
-    const candidateModels = [targetModel, 'gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
-    const uniqueModels = Array.from(new Set(candidateModels.filter(Boolean)));
-    let lastErrorMsg = '';
-
-    for (const mName of uniqueModels) {
+    const text = await response.text();
+    let data: any = null;
+    if (contentType.includes('application/json') && text && text.trim()) {
       try {
-        const directRes = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${mName}:generateContent?key=${resolvedKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: 'Xin chào, trả lời "OK" để kiểm tra độ trễ.' }] }],
-            }),
-          }
-        );
+        data = JSON.parse(text);
+      } catch {}
+    }
 
-        const resText = await directRes.text();
-        let resData: any = null;
-        try {
-          resData = JSON.parse(resText);
-        } catch {}
-
-        if (directRes.ok && resData?.candidates?.length > 0) {
-          const durationMs = Date.now() - startTime;
-          setCachedWorkingModel(mName);
-          return {
-            latencyMs: durationMs,
-            status: 'online',
-            modelName: mName,
-            isCachedModel: true,
-            modelSource: 'default',
-            sourceLabel: 'máy chủ',
-            message: 'Kết nối máy chủ Gemini thành công!',
-          };
-        } else {
-          lastErrorMsg = resData?.error?.message || `Lỗi phản hồi (${directRes.status})`;
-        }
-      } catch (subErr: any) {
-        lastErrorMsg = subErr?.message || 'Lỗi kết nối';
+    if (response.ok && data && data.status !== 'error') {
+      if (data.modelName && isTextOnlyGeminiModel(data.modelName)) {
+        setCachedWorkingModel(data.modelName);
       }
+      return {
+        latencyMs: data.latencyMs || (Date.now() - startTime),
+        status: 'online',
+        modelName: data.modelName || targetModel,
+        isCachedModel: true,
+        modelSource: 'default',
+        sourceLabel: 'máy chủ',
+        message: data.message || 'Kết nối máy chủ Gemini thành công!',
+      };
     }
 
-    if (lastErrorMsg.includes('API_KEY_INVALID') || lastErrorMsg.includes('API key not valid')) {
-      lastErrorMsg = 'Khóa API Key không hợp lệ. Vui lòng kiểm tra lại.';
-    } else if (lastErrorMsg.includes('RESOURCE_EXHAUSTED') || lastErrorMsg.includes('Quota') || lastErrorMsg.includes('429')) {
-      lastErrorMsg = 'Hạn mức API Gemini đã hết (Quota Exceeded). Vui lòng thử lại sau.';
-    }
-
+    const rawErr = data?.error || data?.message || `Lỗi kết nối máy chủ Gemini API (${response.status})`;
     return {
-      latencyMs: Date.now() - startTime,
+      latencyMs: data?.latencyMs || (Date.now() - startTime),
       status: 'error',
-      modelName: targetModel,
+      modelName: data?.modelName || targetModel,
+      httpStatus: response.status,
+      rawErrorDetails: rawErr,
       modelSource: 'default',
       sourceLabel: 'máy chủ',
-      message: sanitizeErrorMessage(lastErrorMsg || 'Không thể kết nối đến máy chủ Gemini.'),
+      message: sanitizeErrorMessage(rawErr),
     };
-  } catch (directErr: any) {
+  } catch (err: any) {
     return {
       latencyMs: Date.now() - startTime,
       status: 'error',
       modelName: targetModel,
+      rawErrorDetails: err?.message || String(err),
       modelSource: 'default',
       sourceLabel: 'máy chủ',
-      message: sanitizeErrorMessage(directErr?.message || 'Lỗi kết nối Gemini API.'),
+      message: sanitizeErrorMessage(err?.message || 'Không thể kết nối đến máy chủ Gemini API.'),
     };
   }
 }
 
 /**
- * Core AI generation call routed to server endpoint with direct client fallback for static hosts (Vercel)
+ * Core AI generation call routed exclusively to server endpoint
  */
 export async function callGeminiApi(
   prompt: string,
@@ -423,94 +322,39 @@ export async function callGeminiApi(
     selectedModel = cachedModel;
   }
 
-  // 1. Try server endpoint first
+  const response = await fetch('/api/gemini/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      prompt,
+      systemInstruction,
+      responseJson,
+      fileData,
+      customKey,
+      model: selectedModel,
+    }),
+  });
+
+  const resText = await response.text();
+  let data: any = null;
   try {
-    const response = await fetch('/api/gemini/generate', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        prompt,
-        systemInstruction,
-        responseJson,
-        fileData,
-        customKey,
-        model: selectedModel,
-      }),
-    });
-
-    const contentType = response.headers.get('content-type') || '';
-    if (response.ok && contentType.includes('application/json')) {
-      const text = await response.text();
-      if (text && text.trim()) {
-        try {
-          const data = JSON.parse(text);
-          if (data && typeof data.text === 'string') {
-            return data.text;
-          }
-        } catch {}
-      }
-    }
-  } catch (serverErr) {
-    console.warn('Server /api/gemini/generate unavailable, falling back to direct client generation:', serverErr);
-  }
-
-  // 2. Direct client fallback with resolved API Key (for Vercel static deployments)
-  const resolvedKey = await resolveGeminiApiKey(customKey);
-  if (!resolvedKey) {
-    throw new Error('Chưa cấu hình Gemini API Key trên hệ thống.');
-  }
-
-  const parts: any[] = [{ text: prompt }];
-  if (fileData?.base64 && fileData?.mimeType) {
-    parts.unshift({
-      inlineData: {
-        mimeType: fileData.mimeType,
-        data: fileData.base64.replace(/^data:[^;]+;base64,/, '')
-      }
-    });
-  }
-
-  const payload: any = {
-    contents: [{ parts }],
-  };
-  if (systemInstruction) {
-    payload.systemInstruction = { parts: [{ text: systemInstruction }] };
-  }
-  if (responseJson) {
-    payload.generationConfig = { responseMimeType: 'application/json' };
-  }
-
-  const directRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${resolvedKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }
-  );
-
-  const resText = await directRes.text();
-  let resData: any = null;
-  try {
-    resData = JSON.parse(resText);
+    data = JSON.parse(resText);
   } catch {
-    throw new Error(`Phản hồi máy chủ không hợp lệ (${directRes.status}): ${resText.slice(0, 100)}`);
+    throw new Error(`Phản hồi máy chủ không hợp lệ (${response.status}): ${resText.slice(0, 120)}`);
   }
 
-  if (!directRes.ok) {
-    const err = resData?.error?.message || `Lỗi Gemini API (${directRes.status})`;
-    throw new Error(sanitizeErrorMessage(err));
+  if (!response.ok) {
+    const errMsg = data?.error || data?.message || `Lỗi Gemini API (${response.status})`;
+    throw new Error(sanitizeErrorMessage(errMsg));
   }
 
-  const candidate = resData?.candidates?.[0];
-  const outText = candidate?.content?.parts?.[0]?.text;
-  if (typeof outText !== 'string') {
+  if (!data || typeof data.text !== 'string') {
     throw new Error('Máy chủ phản hồi dữ liệu rỗng.');
   }
 
-  return outText;
+  return data.text;
 }
 
 /**

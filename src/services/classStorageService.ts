@@ -31,13 +31,74 @@ export const REAL_SCHOOL_CLASSES_FALLBACK: SchoolClassItem[] = [
 ];
 
 /**
- * Format class name string to "Lớp X"
+ * Chuẩn hóa khóa lớp học:
+ * Bỏ mọi tiền tố "Lớp"/"LỚP" lặp lại ở đầu, viết hoa, bỏ khoảng trắng thừa
+ * Ví dụ: "Lớp LỚP 3C", "LỚP 3C", " lớp  3c ", "3C" -> "3C"
+ */
+export function normalizeClassKeyStrict(rawName?: string): string {
+  if (!rawName) return '';
+  let s = String(rawName).trim().replace(/\s+/g, ' ');
+  while (/^(lớp|lop)\b[\s:_-]*/i.test(s)) {
+    s = s.replace(/^(lớp|lop)\b[\s:_-]*/i, '').trim();
+  }
+  return s.replace(/\s+/g, '').toUpperCase();
+}
+
+/**
+ * Format class name string uniformly to "Lớp 3C" (never "Lớp LỚP 3C")
  */
 export function formatClassName(rawName?: string): string {
   if (!rawName) return '';
-  const trimmed = rawName.trim();
-  if (trimmed.startsWith('Lớp ')) return trimmed;
-  return `Lớp ${trimmed}`;
+  const key = normalizeClassKeyStrict(rawName);
+  if (!key) return '';
+  return `Lớp ${key}`;
+}
+
+/**
+ * Deduplicate and normalize an array of class items in-memory (read-only on Firestore)
+ */
+export function deduplicateClassItems(items: SchoolClassItem[]): SchoolClassItem[] {
+  const classMap = new Map<string, SchoolClassItem>();
+  items.forEach((item) => {
+    if (!item) return;
+    const rawName = (item.name || item.id || '').trim();
+    const rawId = (item.id || '').trim();
+    const normalizedKey = normalizeClassKeyStrict(rawName) || normalizeClassKeyStrict(rawId);
+    if (!normalizedKey) return;
+
+    const digit = extractGradeDigit(item.grade) || extractGradeDigit(normalizedKey);
+    if (digit !== '3') return;
+
+    const stdName = `Lớp ${normalizedKey}`;
+    const normalizedItem: SchoolClassItem = {
+      ...item,
+      id: normalizedKey,
+      name: stdName,
+      grade: 'Khối 3',
+      subjects: Array.isArray(item.subjects) && item.subjects.length > 0
+        ? item.subjects
+        : STANDARD_GRADE_SUBJECTS['Khối 3'].map(s => ({ isVisible: true, subjectName: s }))
+    };
+
+    if (classMap.has(normalizedKey)) {
+      const existing = classMap.get(normalizedKey)!;
+      classMap.set(normalizedKey, {
+        ...existing,
+        id: normalizedKey,
+        name: stdName,
+        grade: 'Khối 3',
+        room: existing.room || normalizedItem.room,
+        homeroomTeacher: existing.homeroomTeacher || normalizedItem.homeroomTeacher,
+        subjects: (existing.subjects && existing.subjects.length > 0) ? existing.subjects : normalizedItem.subjects
+      });
+    } else {
+      classMap.set(normalizedKey, normalizedItem);
+    }
+  });
+
+  const list = Array.from(classMap.values());
+  list.sort((a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true }));
+  return list;
 }
 
 /**
@@ -67,19 +128,17 @@ export function subscribeRealtimeClasses(callback: (classes: SchoolClassItem[]) 
           const data = docSnap.data();
           const rawId = (docSnap.id || data.id || data.classId || '').trim();
           const rawName = (data.name || data.className || rawId || '').trim();
-          const name = formatClassName(rawName);
+          const normalizedKey = normalizeClassKeyStrict(rawName) || normalizeClassKeyStrict(rawId);
+          if (!normalizedKey) return;
+
+          const name = `Lớp ${normalizedKey}`;
           const rawGrade = (data.grade || '').trim();
-          const digit = extractGradeDigit(rawGrade) || extractGradeDigit(name);
+          const digit = extractGradeDigit(rawGrade) || extractGradeDigit(normalizedKey);
           if (digit !== '3') return;
           const grade = 'Khối 3';
-          
-          // Normalized key for deduplication (e.g. "3C", "3D")
-          const cleanSuffix = name.replace(/^Lớp\s*/i, '').trim().toUpperCase();
-          const normalizedKey = cleanSuffix || rawId.toUpperCase();
-          const standardId = normalizedKey;
 
           const newItem: SchoolClassItem = {
-            id: standardId,
+            id: normalizedKey,
             name,
             grade,
             room: data.room || '',
@@ -89,7 +148,7 @@ export function subscribeRealtimeClasses(callback: (classes: SchoolClassItem[]) 
               : STANDARD_GRADE_SUBJECTS['Khối 3'].map(s => ({ isVisible: true, subjectName: s }))
           };
 
-          // If item already exists, merge fields favoring non-empty ones
+          // If item already exists, merge fields favoring non-empty ones (read-only UI merge)
           if (classMap.has(normalizedKey)) {
             const existing = classMap.get(normalizedKey)!;
             classMap.set(normalizedKey, {
@@ -228,11 +287,8 @@ export function useClassesList() {
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            const grade3Only = parsed.filter((c: any) => {
-              const d = extractGradeDigit(c?.grade) || extractGradeDigit(c?.name);
-              return d === '3';
-            });
-            if (grade3Only.length > 0) return grade3Only;
+            const deduped = deduplicateClassItems(parsed);
+            if (deduped.length > 0) return deduped;
           }
         }
       }
@@ -248,12 +304,9 @@ export function useClassesList() {
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            const grade3Only = parsed.filter((c: any) => {
-              const d = extractGradeDigit(c?.grade) || extractGradeDigit(c?.name);
-              return d === '3';
-            });
-            if (grade3Only.length > 0) {
-              setClasses(grade3Only);
+            const deduped = deduplicateClassItems(parsed);
+            if (deduped.length > 0) {
+              setClasses(deduped);
             }
           }
         }

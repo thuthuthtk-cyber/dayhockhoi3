@@ -16,23 +16,24 @@ export const EDUPLAY_STUDENTS_DB_KEY = 'eduplay_students_database';
 export const EDUPLAY_CLASSES_DATA_KEY = 'eduplay_classes_data';
 
 /**
- * Standardize class identifier to uppercase (e.g. "Lớp 5B" -> "5B", "5b" -> "5B")
+ * Standardize class identifier to uppercase (e.g. "Lớp LỚP 3C" -> "3C", "Lớp 3C" -> "3C", "3c" -> "3C")
  */
 export function normalizeClassKey(className: string): string {
-  if (!className) return '5B';
-  return className.trim().replace(/^Lớp\s*/i, '').toUpperCase();
+  if (!className) return '3C';
+  let s = String(className).trim().replace(/\s+/g, ' ');
+  while (/^(lớp|lop)\b[\s:_-]*/i.test(s)) {
+    s = s.replace(/^(lớp|lop)\b[\s:_-]*/i, '').trim();
+  }
+  return s.replace(/\s+/g, '').toUpperCase() || '3C';
 }
 
 /**
- * Convert normalized key back to standard display format (e.g. "5b" -> "Lớp 5B")
+ * Convert normalized key back to standard display format (e.g. "3c", "LỚP 3C", "Lớp LỚP 3C" -> "Lớp 3C")
  */
 export function getStandardClassName(classKeyOrName: string): string {
-  if (!classKeyOrName) return 'Lớp 5B';
-  const clean = classKeyOrName.trim();
-  if (clean.toLowerCase().startsWith('lớp ')) {
-    return clean;
-  }
-  return `Lớp ${clean.toUpperCase()}`;
+  if (!classKeyOrName) return 'Lớp 3C';
+  const key = normalizeClassKey(classKeyOrName);
+  return `Lớp ${key}`;
 }
 
 /**
@@ -371,6 +372,11 @@ export function getStudentsFromLocalStorage(className: string): StudentRecord[] 
           }
           if (Array.isArray(parsedDb[key.toLowerCase()])) {
             return deduplicateAndNormalizeStudents(parsedDb[key.toLowerCase()], stdName);
+          }
+          for (const [rawK, listVal] of Object.entries(parsedDb)) {
+            if (normalizeClassKey(rawK) === key && Array.isArray(listVal) && listVal.length > 0) {
+              return deduplicateAndNormalizeStudents(listVal as StudentRecord[], stdName);
+            }
           }
         }
       } catch {}
@@ -1131,10 +1137,8 @@ export function saveStudentEnrollments(enrollments: StudentEnrollmentRecord[]): 
  * Utility to extract normalized classId (e.g. "5D") without "Lớp" prefix
  */
 export function extractClassId(classNameOrId: string): string {
-  if (!classNameOrId) return '1A';
-  const clean = classNameOrId.trim();
-  const stripped = clean.replace(/^(lớp|Lớp|LỚP)\s+/i, '').trim();
-  return stripped.toUpperCase() || '1A';
+  if (!classNameOrId) return '3C';
+  return normalizeClassKey(classNameOrId);
 }
 
 export function upsertStudentEnrollment(

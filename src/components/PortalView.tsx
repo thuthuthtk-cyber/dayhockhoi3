@@ -21,7 +21,7 @@ import {
   normalizeClassKey
 } from '../services/studentStorageService';
 import { resolveTeacherNameByEmail, getCurrentTeacherProfile, verifyTeacherAuthorization } from '../services/teacherStorageService';
-import { useClassesList } from '../services/classStorageService';
+import { useClassesList, normalizeClassKeyStrict, formatClassName } from '../services/classStorageService';
 import { getStudentAvatarSource } from './common/AnimalAvatars';
 
 interface PortalViewProps {
@@ -307,12 +307,22 @@ export function PortalView({ onSelectPortal }: PortalViewProps) {
   const grades = useMemo(() => {
     const allGrades = ['Khối 3'];
     const defaultGrade3Classes = ['Lớp 3C', 'Lớp 3D'];
-    const excludedClasses = new Set(['Lớp 3A', 'Lớp 3B', '3A', '3B']);
+    const excludedKeys = new Set(['3A', '3B']);
     return allGrades.map(g => {
-      const fetched = getClassesForGrade(g)
-        .map(c => c.name)
-        .filter(name => !excludedClasses.has(name.trim()));
-      const merged = Array.from(new Set([...defaultGrade3Classes, ...fetched])).sort((a, b) =>
+      const mergedMap = new Map<string, string>();
+      defaultGrade3Classes.forEach((clsName) => {
+        const normKey = normalizeClassKeyStrict(clsName);
+        if (normKey && !excludedKeys.has(normKey)) {
+          mergedMap.set(normKey, formatClassName(clsName));
+        }
+      });
+      getClassesForGrade(g).forEach((c) => {
+        const normKey = normalizeClassKeyStrict(c.name || c.id);
+        if (normKey && !excludedKeys.has(normKey) && !mergedMap.has(normKey)) {
+          mergedMap.set(normKey, formatClassName(c.name || c.id));
+        }
+      });
+      const merged = Array.from(mergedMap.values()).sort((a, b) =>
         a.localeCompare(b, 'vi', { numeric: true })
       );
       return {
@@ -337,11 +347,16 @@ export function PortalView({ onSelectPortal }: PortalViewProps) {
   const getClassStudentCount = (clsName: string): number => {
     const std = getStandardClassName(clsName);
     const key = normalizeClassKey(clsName);
-    if (clsName === selectedClass && currentClassStudents.length > 0) {
+    if (normalizeClassKey(selectedClass) === key && currentClassStudents.length > 0) {
       return currentClassStudents.length;
     }
     if (allClassRosters[std]?.length) return allClassRosters[std].length;
     if (allClassRosters[key]?.length) return allClassRosters[key].length;
+    for (const [rKey, rList] of Object.entries(allClassRosters)) {
+      if (normalizeClassKey(rKey) === key && Array.isArray(rList) && rList.length > 0) {
+        return rList.length;
+      }
+    }
     const cached = getStudentsFromLocalStorage(std) || getStudentsFromLocalStorage(key);
     return cached?.length || 0;
   };

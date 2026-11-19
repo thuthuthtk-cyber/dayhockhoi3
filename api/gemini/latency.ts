@@ -1,3 +1,8 @@
+import { GoogleGenAI } from '@google/genai';
+
+const RECOMMENDED_MODELS = ['gemini-4-hydrogen', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
+const DEFAULT_MODEL = 'gemini-4-hydrogen';
+
 export default async function handler(req: any, res: any) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -14,45 +19,47 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({
       latencyMs: Date.now() - startTime,
       status: 'error',
-      modelName: 'gemini-3.8-flash',
-      message: 'Chưa cấu hình API Key. Vui lòng nhập Personal API Key hoặc lưu Global API Key.',
+      modelName: DEFAULT_MODEL,
+      message: 'Chưa cấu hình API Key trên hệ thống máy chủ.',
     });
   }
 
   try {
-    const directRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: 'Xin chào, trả lời "OK" để kiểm tra độ trễ.' }] }],
-        }),
-      }
-    );
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
 
-    const data = await directRes.json();
-    if (directRes.ok && data?.candidates?.length > 0) {
-      return res.status(200).json({
-        latencyMs: Date.now() - startTime,
-        status: 'online',
-        modelName: 'gemini-3.8-flash',
-        message: 'Kết nối máy chủ Gemini thành công!',
-      });
+    let lastError: any = null;
+    for (const modelName of RECOMMENDED_MODELS) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: 'Xin chào, trả lời "OK" để kiểm tra độ trễ.',
+        });
+        if (response?.text) {
+          return res.status(200).json({
+            latencyMs: Date.now() - startTime,
+            status: 'online',
+            modelName,
+            message: 'Kết nối máy chủ Gemini thành công!',
+          });
+        }
+      } catch (err: any) {
+        lastError = err;
+      }
     }
 
-    const errMsg = data?.error?.message || `Lỗi Gemini API (${directRes.status})`;
-    return res.status(500).json({
-      latencyMs: Date.now() - startTime,
-      status: 'error',
-      modelName: 'gemini-3.8-flash',
-      message: errMsg,
-    });
+    throw lastError || new Error('Không thể kết nối với các mô hình Gemini.');
   } catch (err: any) {
     return res.status(500).json({
       latencyMs: Date.now() - startTime,
       status: 'error',
-      modelName: 'gemini-3.8-flash',
+      modelName: DEFAULT_MODEL,
       message: err?.message || 'Lỗi kết nối máy chủ Gemini',
     });
   }

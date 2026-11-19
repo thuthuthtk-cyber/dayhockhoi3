@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { 
   Menu, 
   Sparkles, 
-  Calendar, 
   Key, 
   CheckCircle2, 
   UserCheck, 
@@ -24,8 +23,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeModuleName
 }) => {
   const { 
-    semester, 
-    setSemester, 
     currentUser, 
     switchRole, 
     apiKey, 
@@ -38,12 +35,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [tempKey, setTempKey] = useState(apiKey);
-
-  const semesters = [
-    'Học kỳ I • 2026-2027',
-    'Học kỳ II • 2026-2027',
-    'Hè • 2026-2027'
-  ];
 
   return (
     <>
@@ -74,24 +65,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Right: Semester + Gemini AI Badge + Firebase Auth + Role Switcher */}
+        {/* Right: Gemini AI Badge + Firebase Auth + Role Switcher */}
         <div className="flex items-center gap-2 lg:gap-3">
-          {/* Semester Selector */}
-          <div className="relative hidden sm:block">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200/80">
-              <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-              <select
-                value={semester}
-                onChange={(e) => setSemester(e.target.value)}
-                className="bg-transparent text-xs font-semibold focus:outline-none cursor-pointer pr-1"
-              >
-                {semesters.map((sem) => (
-                  <option key={sem} value={sem}>{sem}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
           {/* Gemini AI Status Badge */}
           <button
             onClick={() => setShowKeyModal(true)}

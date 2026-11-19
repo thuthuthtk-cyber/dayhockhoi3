@@ -49,7 +49,14 @@ import {
 } from 'lucide-react';
 import { UserAccount, UserRole, StudentRecord } from '../../types';
 import { PRIMARY_SCHOOL_SUBJECTS } from '../../services/mockData';
-import { STANDARD_GRADE_SUBJECTS } from '../../services/classStorageService';
+import { STANDARD_GRADE_SUBJECTS, normalizeClassKeyStrict, formatClassName } from '../../services/classStorageService';
+import {
+  scanClassDuplicatesFromFirestore,
+  createDedupBackupSnapshot,
+  executeConfirmedDedupRow,
+  ClassDuplicateScanResult,
+  ClassDuplicatePreviewRow
+} from '../../services/classDedupService';
 import { formatScore } from '../../utils/scoreUtils';
 import { groupAndCountErrors } from '../../services/firestoreWriteTracker';
 import {
@@ -347,14 +354,35 @@ const isGrade3Class = (c: { grade?: string; name?: string; id?: string }): boole
 const getClassesFromLocalStorage = (): ClassConfig[] => {
   const data = localStorage.getItem('eduplay_classes_config');
   const classMap = new Map<string, ClassConfig>();
-  INITIAL_CLASSES.forEach(c => classMap.set(c.id, c));
+  INITIAL_CLASSES.forEach((c) => {
+    const key = normalizeClassKeyStrict(c.name || c.id);
+    if (key) {
+      classMap.set(key, { ...c, id: key, name: formatClassName(key), grade: 'Khối 3' });
+    }
+  });
   if (data) {
     try {
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed)) {
         parsed.forEach((c: ClassConfig) => {
-          if (c && c.id && isGrade3Class(c)) {
-            classMap.set(c.id, { ...c, grade: 'Khối 3' });
+          if (c && (c.id || c.name) && isGrade3Class(c)) {
+            const key = normalizeClassKeyStrict(c.name || c.id);
+            if (!key) return;
+            const stdName = formatClassName(key);
+            const existing = classMap.get(key);
+            classMap.set(key, {
+              ...(existing || {}),
+              ...c,
+              id: key,
+              name: stdName,
+              grade: 'Khối 3',
+              room: c.room || existing?.room || '',
+              homeroomTeacher: c.homeroomTeacher || existing?.homeroomTeacher || '',
+              homeroomTeacherId: c.homeroomTeacherId || existing?.homeroomTeacherId || '',
+              subjects: Array.isArray(c.subjects) && c.subjects.length > 0
+                ? c.subjects
+                : (existing?.subjects || (STANDARD_GRADE_SUBJECTS['Khối 3'] || []).map((s) => ({ isVisible: true, subjectName: s })))
+            });
           }
         });
       }
@@ -728,47 +756,50 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
     let unsubStudents: (() => void) | null = null;
 
     if (db) {
-      // 1. Real-time listener for 'classes' collection
+      // 1. Real-time listener for 'classes' collection (read-only normalization & merge)
       unsubClasses = onSnapshot(
         collection(db, 'classes'),
         (snapshot) => {
           if (!snapshot.empty) {
-            const cloudClasses: ClassConfig[] = [];
-            const seenKeys = new Set<string>();
+            const classMap = new Map<string, ClassConfig>();
+            INITIAL_CLASSES.forEach((c) => {
+              const k = normalizeClassKeyStrict(c.name || c.id);
+              if (k) {
+                classMap.set(k, { ...c, id: k, name: formatClassName(k), grade: 'Khối 3' });
+              }
+            });
+
             snapshot.forEach((docSnap) => {
               const data = docSnap.data();
               const rawId = (docSnap.id || data.id || data.classId || '').trim();
-              const rawName = data.name || data.className || rawId || 'Lớp mới';
-              const stdName = getStandardClassName(rawName);
-              const upperKey = stdName.replace(/^Lớp\s*/i, '').trim().toUpperCase() || rawId.toUpperCase();
+              const rawName = (data.name || data.className || rawId || '').trim();
+              const upperKey = normalizeClassKeyStrict(rawName) || normalizeClassKeyStrict(rawId);
+              if (!upperKey) return;
+              const stdName = formatClassName(upperKey);
               const gradeDigit = (data.grade || '').replace(/[^0-9]/g, '') || upperKey.replace(/[^0-9]/g, '');
               if (gradeDigit !== '3') return;
-              
-              if (!seenKeys.has(upperKey)) {
-                seenKeys.add(upperKey);
-                cloudClasses.push({
-                  id: upperKey,
-                  grade: 'Khối 3',
-                  name: stdName,
-                  room: data.room || '',
-                  homeroomTeacher: data.homeroomTeacher || '',
-                  homeroomTeacherId: data.homeroomTeacherId || '',
-                  subjects: Array.isArray(data.subjects) && data.subjects.length > 0
-                    ? data.subjects
-                    : (STANDARD_GRADE_SUBJECTS['Khối 3'] || PRIMARY_SCHOOL_SUBJECTS).map((s) => ({ isVisible: true, subjectName: s }))
-                });
-              }
+
+              const existing = classMap.get(upperKey);
+              classMap.set(upperKey, {
+                id: upperKey,
+                grade: 'Khối 3',
+                name: stdName,
+                room: data.room || existing?.room || '',
+                homeroomTeacher: data.homeroomTeacher || existing?.homeroomTeacher || '',
+                homeroomTeacherId: data.homeroomTeacherId || existing?.homeroomTeacherId || '',
+                subjects: Array.isArray(data.subjects) && data.subjects.length > 0
+                  ? data.subjects
+                  : (existing?.subjects || (STANDARD_GRADE_SUBJECTS['Khối 3'] || PRIMARY_SCHOOL_SUBJECTS).map((s) => ({ isVisible: true, subjectName: s })))
+              });
             });
-            const classMap = new Map<string, ClassConfig>();
-            INITIAL_CLASSES.forEach(c => classMap.set(c.id, c));
-            cloudClasses.forEach(c => classMap.set(c.id, c));
+
             const fullClasses = Array.from(classMap.values());
             fullClasses.sort((a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true }));
 
             setClassesList(fullClasses);
             saveClassesToLocalStorage(fullClasses);
           } else {
-            // If snapshot is empty, restore INITIAL_CLASSES
+            // If snapshot is empty, restore INITIAL_CLASSES in-memory/cache
             saveClassesToLocalStorage(INITIAL_CLASSES);
             setClassesList(INITIAL_CLASSES);
           }
@@ -776,7 +807,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
         (err) => console.warn('Error listening to classes in Firestore:', err)
       );
 
-      // 2. Real-time listener for 'class_rosters' collection (robust dual-key normalization)
+      // 2. Real-time listener for 'class_rosters' collection (robust dual-key normalization, prevent empty duplicate docs from overwriting populated rosters)
       unsubRosters = onSnapshot(
         collection(db, 'class_rosters'),
         (snapshot) => {
@@ -786,15 +817,19 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
               const data = docSnap.data();
               const rawName = (data.className || data.name || data.classKey || data.id || docSnap.id || '').trim();
               if (rawName) {
-                const stdName = getStandardClassName(rawName);
-                const upperKey = normalizeClassKey(rawName);
+                const upperKey = normalizeClassKeyStrict(rawName) || normalizeClassKeyStrict(docSnap.id);
+                if (!upperKey) return;
+                const stdName = formatClassName(upperKey);
                 const studentList = Array.isArray(data.students)
                   ? data.students
                   : (Array.isArray(data.studentList) ? data.studentList : (Array.isArray(data.roster) ? data.roster : []));
                 if (Array.isArray(studentList)) {
                   const cleaned = deduplicateAndNormalizeStudents(studentList as StudentRecord[], stdName);
-                  cloudRosters[stdName] = cleaned;
-                  cloudRosters[upperKey] = cleaned;
+                  const existingForKey = cloudRosters[upperKey];
+                  if (existingForKey === undefined || (existingForKey.length === 0 && cleaned.length > 0) || cleaned.length > existingForKey.length) {
+                    cloudRosters[stdName] = cleaned;
+                    cloudRosters[upperKey] = cleaned;
+                  }
                 }
               }
             });
@@ -1003,6 +1038,76 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
   // Clear all students state
   const [isConfirmClearAllStudentsOpen, setIsConfirmClearAllStudentsOpen] = useState(false);
   const [isClearingAllStudents, setIsClearingAllStudents] = useState(false);
+
+  // Admin Class Deduplication Tool State
+  const [isDedupModalOpen, setIsDedupModalOpen] = useState(false);
+  const [isScanningDedup, setIsScanningDedup] = useState(false);
+  const [dedupScanResult, setDedupScanResult] = useState<ClassDuplicateScanResult | null>(null);
+  const [dedupScanError, setDedupScanError] = useState<string | null>(null);
+  const [processingDedupRowId, setProcessingDedupRowId] = useState<string | null>(null);
+  const [completedDedupRowIds, setCompletedDedupRowIds] = useState<Record<string, string>>({});
+  const [dedupActionNotice, setDedupActionNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const handleOpenDedupTool = async () => {
+    setIsDedupModalOpen(true);
+    setIsScanningDedup(true);
+    setDedupScanError(null);
+    setDedupActionNotice(null);
+    setCompletedDedupRowIds({});
+    try {
+      const result = await scanClassDuplicatesFromFirestore();
+      setDedupScanResult(result);
+    } catch (err: any) {
+      setDedupScanError(err?.message || 'Không thể quét dữ liệu trùng lặp từ Firestore.');
+    } finally {
+      setIsScanningDedup(false);
+    }
+  };
+
+  const handleDownloadDedupBackup = () => {
+    if (!dedupScanResult) return;
+    const { jsonContent, filename } = createDedupBackupSnapshot(dedupScanResult);
+    const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setDedupActionNotice({
+      type: 'success',
+      message: `Đã tải xuống bản sao lưu dữ liệu (${filename}) và lưu dự phòng trong trình duyệt.`
+    });
+  };
+
+  const handleConfirmDedupRow = async (row: ClassDuplicatePreviewRow) => {
+    if (!dedupScanResult || processingDedupRowId) return;
+    setProcessingDedupRowId(row.rowId);
+    setDedupActionNotice(null);
+    try {
+      const res = await executeConfirmedDedupRow(row, dedupScanResult);
+      if (res.success) {
+        setCompletedDedupRowIds((prev) => ({ ...prev, [row.rowId]: res.message }));
+        setDedupActionNotice({ type: 'success', message: res.message });
+        showToast(res.message, 'success');
+        try {
+          const updatedScan = await scanClassDuplicatesFromFirestore();
+          setDedupScanResult(updatedScan);
+        } catch {}
+      } else {
+        setDedupActionNotice({ type: 'error', message: res.message });
+        showToast(res.message, 'error');
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Lỗi khi xử lý dòng gộp lớp.';
+      setDedupActionNotice({ type: 'error', message: msg });
+      showToast(msg, 'error');
+    } finally {
+      setProcessingDedupRowId(null);
+    }
+  };
 
   const handleConfirmClearAllStudents = async () => {
     if (!selectedClass) {
@@ -2106,13 +2211,28 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
 
                 {userRole !== 'student' && (
                   <div className="flex items-center gap-2.5 flex-wrap">
+                    {isSystemAdmin && (
+                      <button
+                        type="button"
+                        onClick={handleOpenDedupTool}
+                        className="px-4 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition-all shadow-md flex items-center gap-2 cursor-pointer active:scale-95 whitespace-nowrap"
+                      >
+                        <Database className="w-4 h-4" /> Kiểm tra & Dọn trùng lớp
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={async () => {
                         try {
                           const classMap = new Map<string, ClassConfig>();
-                          INITIAL_CLASSES.forEach(c => classMap.set(c.id, c));
-                          classesList.filter(isGrade3Class).forEach(c => classMap.set(c.id, c));
+                          INITIAL_CLASSES.forEach((c) => {
+                            const key = normalizeClassKeyStrict(c.name || c.id);
+                            if (key) classMap.set(key, { ...c, id: key, name: formatClassName(key), grade: 'Khối 3' });
+                          });
+                          classesList.filter(isGrade3Class).forEach((c) => {
+                            const key = normalizeClassKeyStrict(c.name || c.id);
+                            if (key) classMap.set(key, { ...c, id: key, name: formatClassName(key), grade: 'Khối 3' });
+                          });
                           const restored = Array.from(classMap.values());
                           restored.sort((a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true }));
 
@@ -2149,11 +2269,16 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const newId = `C-${Date.now()}`;
+                        const usedKeys = new Set(activeBlockClasses.map((c) => normalizeClassKeyStrict(c.name || c.id)));
+                        let nextCharCode = 67; // 'C'
+                        while (usedKeys.has(`3${String.fromCharCode(nextCharCode)}`) && nextCharCode < 90) {
+                          nextCharCode++;
+                        }
+                        const suggestedName = `Lớp 3${String.fromCharCode(nextCharCode)}`;
                         const newClass: ClassConfig = {
-                          id: newId,
+                          id: `__NEW__${Date.now()}`,
                           grade: 'Khối 3',
-                          name: `Lớp 3${String.fromCharCode(67 + activeBlockClasses.length)}`,
+                          name: suggestedName,
                           room: `Phòng 30${activeBlockClasses.length + 3}`,
                           subjects: PRIMARY_SCHOOL_SUBJECTS.map(s => ({ isVisible: true, subjectName: s }))
                         };
@@ -4256,6 +4381,219 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
         </div>
       )}
 
+      {/* MODAL DỌN TRÙNG BẢN GHI LỚP HỌC (ADMIN) */}
+      {isDedupModalOpen && (
+        <div className="fixed inset-0 z-60 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-5xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-slate-200">
+            <div className="p-5 bg-gradient-to-r from-indigo-700 to-blue-700 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-white/15">
+                  <Database className="w-5 h-5 text-amber-300" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold uppercase tracking-wide">
+                    Công Cụ Kiểm Tra &amp; Dọn Trùng Lớp Học (Admin)
+                  </h3>
+                  <p className="text-xs text-indigo-100 font-medium">
+                    Xem trước toàn bộ bản ghi trùng / chưa chuẩn hóa, sao lưu trước khi ghi và xác nhận từng dòng
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDedupModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center cursor-pointer transition-all"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-4 flex-1">
+              <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-2xl text-xs text-blue-900 flex items-start gap-2.5">
+                <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-extrabold">Nguyên tắc an toàn dữ liệu:</div>
+                  <p className="text-blue-800 leading-relaxed">
+                    Quá trình quét hoàn toàn <b>chỉ đọc</b>. Hệ thống chỉ thực hiện chuẩn hóa hoặc gộp khi Admin bấm <b>Xác nhận từng dòng</b> và luôn <b>tự động sao lưu JSON</b> trước khi ghi lên Firestore.
+                  </p>
+                </div>
+              </div>
+
+              {isScanningDedup && (
+                <div className="py-12 text-center space-y-3">
+                  <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mx-auto" />
+                  <p className="text-sm font-bold text-slate-700">Đang quét các collection classes, class_rosters, assignments, exams...</p>
+                </div>
+              )}
+
+              {dedupScanError && (
+                <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-center gap-2 font-bold">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{dedupScanError}</span>
+                </div>
+              )}
+
+              {dedupActionNotice && (
+                <div
+                  className={`p-3.5 rounded-2xl border text-xs font-bold flex items-center gap-2 ${
+                    dedupActionNotice.type === 'success'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
+                  }`}
+                >
+                  {dedupActionNotice.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  )}
+                  <span>{dedupActionNotice.message}</span>
+                </div>
+              )}
+
+              {!isScanningDedup && dedupScanResult && (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                      <div className="text-[11px] font-bold text-slate-500">Bản ghi classes</div>
+                      <div className="text-lg font-black text-slate-900">{dedupScanResult.totalClassesDocs}</div>
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                      <div className="text-[11px] font-bold text-slate-500">Bản ghi class_rosters</div>
+                      <div className="text-lg font-black text-slate-900">{dedupScanResult.totalRosterDocs}</div>
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                      <div className="text-[11px] font-bold text-slate-500">Bài tập (assignments)</div>
+                      <div className="text-lg font-black text-slate-900">{dedupScanResult.totalAssignments}</div>
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                      <div className="text-[11px] font-bold text-slate-500">Đề thi (exams)</div>
+                      <div className="text-lg font-black text-slate-900">{dedupScanResult.totalExams}</div>
+                    </div>
+                  </div>
+
+                  {dedupScanResult.hasDataDifferences && (
+                    <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl text-xs text-amber-900 space-y-1">
+                      <div className="font-extrabold flex items-center gap-2 text-amber-800">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Cảnh báo: Phát hiện bản ghi trùng có danh sách học sinh khác nhau</span>
+                      </div>
+                      <ul className="list-disc pl-5 space-y-0.5 text-amber-800">
+                        {dedupScanResult.differenceSummary.map((item, idx) => (
+                          <li key={idx}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {dedupScanResult.rows.length === 0 ? (
+                    <div className="text-center py-10 space-y-2.5 bg-emerald-50/50 border border-emerald-200 rounded-2xl">
+                      <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto" />
+                      <h4 className="text-sm font-extrabold text-emerald-950">
+                        Tất cả bản ghi lớp học đã chuẩn hóa và không còn dữ liệu trùng!
+                      </h4>
+                      <p className="text-xs text-emerald-700">
+                        Không có bản ghi classes, class_rosters, assignments hay exams nào cần dọn trùng thêm.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                      <div className="overflow-x-auto max-h-[380px]">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead className="bg-slate-100 text-slate-700 font-extrabold uppercase text-[10px] sticky top-0 border-b border-slate-200">
+                            <tr>
+                              <th className="p-3">ID lớp / Nguồn</th>
+                              <th className="p-3">Tên hiện tại</th>
+                              <th className="p-3 text-center">Số HS</th>
+                              <th className="p-3 text-center">Số bài nộp</th>
+                              <th className="p-3">Bản giữ lại</th>
+                              <th className="p-3">Bản sẽ gộp / Thay đổi</th>
+                              <th className="p-3 text-right">Xác nhận</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                            {dedupScanResult.rows.map((row) => {
+                              const isDone = Boolean(completedDedupRowIds[row.rowId]);
+                              const isRunning = processingDedupRowId === row.rowId;
+                              return (
+                                <tr key={row.rowId} className="hover:bg-slate-50/80 align-top">
+                                  <td className="p-3 font-mono text-[11px] font-bold text-indigo-700 whitespace-nowrap">
+                                    {row.sourceCollection}/{row.sourceDocId}
+                                  </td>
+                                  <td className="p-3 font-bold text-slate-900">
+                                    <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-900">
+                                      {row.currentName}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-center font-extrabold text-slate-800">{row.studentCount}</td>
+                                  <td className="p-3 text-center font-extrabold text-slate-800">{row.submissionCount}</td>
+                                  <td className="p-3 text-emerald-800 font-semibold">{row.keepRecordLabel}</td>
+                                  <td className="p-3 space-y-1">
+                                    <div className="text-slate-800">{row.mergeRecordLabel}</div>
+                                    {row.hasDifferentData && row.differenceNote && (
+                                      <div className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded-lg">
+                                        {row.differenceNote}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-right whitespace-nowrap">
+                                    {isDone ? (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 text-[11px] font-extrabold">
+                                        <Check className="w-3.5 h-3.5" /> Đã xử lý
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        disabled={Boolean(processingDedupRowId)}
+                                        onClick={() => handleConfirmDedupRow(row)}
+                                        className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-[11px] transition-all cursor-pointer active:scale-95"
+                                      >
+                                        {isRunning ? 'Đang xử lý...' : row.actionType === 'normalize_class_name' || row.actionType === 'normalize_target_class' ? 'Xác nhận chuẩn hóa' : 'Xác nhận gộp'}
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!dedupScanResult || isScanningDedup}
+                  onClick={handleDownloadDedupBackup}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-700 font-bold text-xs flex items-center gap-2 cursor-pointer transition-all"
+                >
+                  <Download className="w-4 h-4 text-indigo-600" /> Tải bản sao lưu JSON
+                </button>
+                <button
+                  type="button"
+                  disabled={isScanningDedup || Boolean(processingDedupRowId)}
+                  onClick={handleOpenDedupTool}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-700 font-bold text-xs flex items-center gap-2 cursor-pointer transition-all"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isScanningDedup ? 'animate-spin' : ''}`} /> Quét lại
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDedupModalOpen(false)}
+                className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs transition-all cursor-pointer"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* FLOATING SUCCESS TOAST NOTIFICATION */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 bg-emerald-600 text-white px-5 py-3.5 rounded-2xl shadow-2xl border border-emerald-400 flex items-center gap-3 animate-slide-up backdrop-blur-md">
@@ -4328,6 +4666,7 @@ const EditClassModal: React.FC<EditClassModalProps> = ({
   });
 
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Filter teachers for autocomplete dropdown
   const filteredTeachers = useMemo(() => {
@@ -4341,15 +4680,57 @@ const EditClassModal: React.FC<EditClassModalProps> = ({
     );
   }, [teachersList, teacherSearch]);
 
+  const isCreatingNewClass = editingClass.id.startsWith('__NEW__') || !classesList.some(c => c.id === editingClass.id);
+
   const handleSave = async () => {
     if (!classNameInput.trim()) return;
+    setFormError(null);
     setIsSaving(true);
 
     try {
       const originalId = editingClass.id;
-      const normalizedId = normalizeClassKey(classNameInput).toUpperCase();
-      const finalId = normalizedId;
-      const stdName = getStandardClassName(classNameInput);
+      const originalKey = !isCreatingNewClass
+        ? normalizeClassKeyStrict(editingClass.name || editingClass.id)
+        : '';
+      const finalId = normalizeClassKeyStrict(classNameInput);
+      const stdName = formatClassName(classNameInput);
+
+      if (!finalId || !stdName) {
+        setFormError('Vui lòng nhập tên lớp hợp lệ (ví dụ: 3E hoặc Lớp 3E).');
+        return;
+      }
+
+      // 1. Chặn tạo / đổi sang lớp trùng trong danh sách hiện tại
+      const duplicateInLocal = classesList.some((c) => {
+        const cKey = normalizeClassKeyStrict(c.name || c.id);
+        if (cKey !== finalId) return false;
+        if (isCreatingNewClass) return true;
+        return c.id !== originalId && cKey !== originalKey;
+      });
+      if (duplicateInLocal) {
+        setFormError(`Lớp này đã tồn tại (${stdName}). Vui lòng chọn tên lớp khác.`);
+        return;
+      }
+
+      // 2. Kiểm tra chéo trên Firestore (try/catch an toàn) để chặn tạo lớp trùng
+      if (db) {
+        try {
+          const snap = await getDocs(collection(db, 'classes'));
+          const duplicateInCloud = snap.docs.some((d) => {
+            const dData = d.data();
+            const dKey = normalizeClassKeyStrict(dData?.name || dData?.className || d.id);
+            if (!dKey || dKey !== finalId) return false;
+            if (isCreatingNewClass) return true;
+            return d.id !== originalId && dKey !== originalKey;
+          });
+          if (duplicateInCloud) {
+            setFormError(`Lớp này đã tồn tại trên hệ thống (${stdName}). Không thể tạo lớp trùng.`);
+            return;
+          }
+        } catch (checkErr) {
+          console.warn('Firestore duplicate class check warning:', checkErr);
+        }
+      }
 
       const updatedSubjects = PRIMARY_SCHOOL_SUBJECTS.map(subj => ({
         subjectName: subj,
@@ -4364,40 +4745,38 @@ const EditClassModal: React.FC<EditClassModalProps> = ({
         subjects: updatedSubjects
       };
 
-      const exists = classesList.some(
-        c => c.id.toUpperCase() === finalId || c.name.trim().toUpperCase() === stdName.toUpperCase()
+      const exists = !isCreatingNewClass && classesList.some(
+        c => normalizeClassKeyStrict(c.name || c.id) === finalId || c.id === originalId
       );
 
-      // 1. Update classesList - apply updatedSubjects to ALL classes belonging to gradeInput!
-      let newClassesList: ClassConfig[] = classesList.map(c => {
-        if (c.id.toUpperCase() === finalId || c.id === originalId || c.name.trim().toUpperCase() === stdName.toUpperCase()) {
-          return cleanClass;
-        }
-        if (c.grade === gradeInput) {
-          return {
+      // Update classesList while deduplicating by strict normalized key
+      const classMap = new Map<string, ClassConfig>();
+      classesList.forEach((c) => {
+        const cKey = normalizeClassKeyStrict(c.name || c.id);
+        if (!cKey) return;
+        if (c.id === originalId || cKey === finalId) {
+          classMap.set(finalId, cleanClass);
+        } else {
+          classMap.set(cKey, {
             ...c,
-            subjects: updatedSubjects
-          };
+            id: cKey,
+            name: formatClassName(cKey),
+            subjects: c.grade === gradeInput ? updatedSubjects : c.subjects
+          });
         }
-        return c;
       });
+      classMap.set(finalId, cleanClass);
+      const newClassesList = Array.from(classMap.values()).sort((a, b) =>
+        a.name.localeCompare(b.name, 'vi', { numeric: true })
+      );
 
-      if (!newClassesList.some(c => c.id.toUpperCase() === finalId)) {
-        newClassesList = [
-          ...newClassesList.filter(
-            c => c.id !== originalId && c.id.toUpperCase() !== finalId && c.name.trim().toUpperCase() !== stdName.toUpperCase()
-          ),
-          cleanClass
-        ];
-      }
-
-      // 2. Update teachersList for homeroom teacher assignment
+      // Update teachersList for homeroom teacher assignment
       const targetClassName = cleanClass.name;
       const oldClassName = editingClass.name;
 
       const newTeachersList = teachersList.map(t => {
         let hClasses = t.homeroomClasses ? [...t.homeroomClasses] : [];
-        hClasses = hClasses.filter(c => c !== targetClassName && c !== oldClassName);
+        hClasses = hClasses.filter(c => normalizeClassKeyStrict(c) !== finalId && c !== targetClassName && c !== oldClassName);
         let nhomGv = t.nhomGvCn;
 
         if (selectedTeacher && t.id === selectedTeacher.id) {
@@ -4423,6 +4802,7 @@ const EditClassModal: React.FC<EditClassModalProps> = ({
       await onSave(newClassesList, newTeachersList, toastMsg);
     } catch (err) {
       console.error(err);
+      setFormError('Có lỗi xảy ra khi lưu thông tin lớp học.');
     } finally {
       setIsSaving(false);
     }
@@ -4486,6 +4866,13 @@ const EditClassModal: React.FC<EditClassModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto flex-1 space-y-4">
+          {formError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
           {activeTab === 'info' && (
             <div className="space-y-4">
               {/* Tên lớp học */}
@@ -4494,10 +4881,18 @@ const EditClassModal: React.FC<EditClassModalProps> = ({
                 <input
                   type="text"
                   value={classNameInput}
-                  onChange={(e) => setClassNameInput(e.target.value)}
+                  onChange={(e) => {
+                    setClassNameInput(e.target.value);
+                    if (formError) setFormError(null);
+                  }}
                   className="w-full p-3 text-xs font-semibold rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="Ví dụ: Lớp 3C"
                 />
+                {classNameInput.trim() && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Tên chuẩn hóa: <b className="text-blue-700">{formatClassName(classNameInput) || '—'}</b> (Mã lớp: <b className="font-mono">{normalizeClassKeyStrict(classNameInput) || '—'}</b>)
+                  </p>
+                )}
               </div>
 
               {/* Thuộc Khối */}
@@ -5545,28 +5940,28 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
       (snapshot) => {
         if (!snapshot.empty) {
           const map = new Map<string, ClassConfig>();
-          snapshot.forEach((docSnap) => {
+      snapshot.forEach((docSnap) => {
             const data = docSnap.data();
             const rawId = (docSnap.id || data.id || data.classId || '').trim();
-            const rawName = data.name || rawId || 'Lớp mới';
-            const stdName = getStandardClassName(rawName);
-            const cleanKey = stdName.replace(/^Lớp\s*/i, '').trim().toUpperCase() || rawId.toUpperCase();
+            const rawName = (data.name || data.className || rawId || '').trim();
+            const cleanKey = normalizeClassKeyStrict(rawName) || normalizeClassKeyStrict(rawId);
+            if (!cleanKey) return;
+            const stdName = formatClassName(cleanKey);
             const gDigit = (data.grade || '').replace(/[^0-9]/g, '') || cleanKey.replace(/[^0-9]/g, '');
             if (gDigit !== '3') return;
 
-            if (!map.has(cleanKey)) {
-              map.set(cleanKey, {
-                id: cleanKey,
-                grade: 'Khối 3',
-                name: stdName,
-                room: data.room || '',
-                homeroomTeacher: data.homeroomTeacher || '',
-                homeroomTeacherId: data.homeroomTeacherId || '',
-                subjects: Array.isArray(data.subjects) && data.subjects.length > 0
-                  ? data.subjects
-                  : (STANDARD_GRADE_SUBJECTS['Khối 3'] || PRIMARY_SCHOOL_SUBJECTS).map((s) => ({ isVisible: true, subjectName: s }))
-              });
-            }
+            const existing = map.get(cleanKey);
+            map.set(cleanKey, {
+              id: cleanKey,
+              grade: 'Khối 3',
+              name: stdName,
+              room: data.room || existing?.room || '',
+              homeroomTeacher: data.homeroomTeacher || existing?.homeroomTeacher || '',
+              homeroomTeacherId: data.homeroomTeacherId || existing?.homeroomTeacherId || '',
+              subjects: Array.isArray(data.subjects) && data.subjects.length > 0
+                ? data.subjects
+                : (existing?.subjects || (STANDARD_GRADE_SUBJECTS['Khối 3'] || PRIMARY_SCHOOL_SUBJECTS).map((s) => ({ isVisible: true, subjectName: s })))
+            });
           });
           const list = Array.from(map.values()).sort((a, b) =>
             a.name.localeCompare(b.name, 'vi', { numeric: true })
@@ -5598,9 +5993,10 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
           snapshot.forEach((docSnap) => {
             const data = docSnap.data();
             const docId = docSnap.id.trim();
-            const rawName = (data.className || docId).trim();
-            const stdName = getStandardClassName(rawName);
-            const cleanKey = stdName.replace(/^Lớp\s*/i, '').trim().toUpperCase();
+            const rawName = (data.className || data.name || data.classKey || docId).trim();
+            const cleanKey = normalizeClassKeyStrict(rawName) || normalizeClassKeyStrict(docId);
+            if (!cleanKey) return;
+            const stdName = formatClassName(cleanKey);
 
             const studentList = Array.isArray(data.students)
               ? data.students
@@ -5612,14 +6008,14 @@ const EndYearPromotionView: React.FC<EndYearPromotionViewProps> = ({ classesList
 
             if (Array.isArray(studentList)) {
               const cleaned = deduplicateAndNormalizeStudents(studentList as StudentRecord[], stdName);
-              newRosters[cleanKey] = cleaned;
-              newRosters[stdName] = cleaned;
-              newRosters[docId.toUpperCase()] = cleaned;
+              const existingRoster = newRosters[cleanKey];
+              if (existingRoster === undefined || (existingRoster.length === 0 && cleaned.length > 0) || cleaned.length > existingRoster.length) {
+                newRosters[cleanKey] = cleaned;
+                newRosters[stdName] = cleaned;
+                newCounts[cleanKey] = Math.max(count, cleaned.length);
+                newCounts[stdName] = Math.max(count, cleaned.length);
+              }
             }
-
-            newCounts[cleanKey] = count;
-            newCounts[stdName] = count;
-            newCounts[docId.toUpperCase()] = count;
           });
 
           setRostersByClass(newRosters);

@@ -21,15 +21,15 @@ const appFb = initializeApp(firebaseConfig);
 const db = getFirestore(appFb);
 
 // Modern supported models (excluding deprecated models)
-const RECOMMENDED_MODELS = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
-const DEFAULT_MODEL = 'gemini-3.8-flash';
+const RECOMMENDED_MODELS = ['gemini-4-hydrogen', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
+const DEFAULT_MODEL = 'gemini-4-hydrogen';
 const LIVE_MODEL = 'gemini-3.8-live';
 
 function sanitizeModelName(model?: string): string {
   if (!model || typeof model !== 'string') return DEFAULT_MODEL;
   const m = model.trim().toLowerCase();
-  // Map deprecated models to standard modern models
-  if (m.includes('1.5') || m.includes('2.0') || m.includes('pro-latest')) {
+  // Map deprecated or legacy aliases to standard modern models
+  if (m.includes('1.5') || m.includes('2.0') || m.includes('3.8-flash') || m.includes('flash-latest') || m.includes('pro-latest')) {
     return DEFAULT_MODEL;
   }
   return model.trim();
@@ -256,16 +256,31 @@ async function startServer() {
 
       const contents = await buildContents(prompt, fileData);
       const targetModel = sanitizeModelName(model);
+      const candidateModels = [targetModel, ...RECOMMENDED_MODELS.filter(m => m !== targetModel)];
+
+      let responseStream: any = null;
+      let lastError: any = null;
+      for (const modelName of candidateModels) {
+        try {
+          responseStream = await ai.models.generateContentStream({
+            model: modelName,
+            contents,
+            config,
+          });
+          if (responseStream) break;
+        } catch (streamModelErr: any) {
+          lastError = streamModelErr;
+          console.warn(`Stream model ${modelName} encountered error, trying next available model...`, streamModelErr?.message);
+        }
+      }
+
+      if (!responseStream) {
+        throw lastError || new Error('Không thể khởi tạo luồng phản hồi từ mô hình AI.');
+      }
 
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
-
-      const responseStream = await ai.models.generateContentStream({
-        model: targetModel,
-        contents,
-        config,
-      });
 
       for await (const chunk of responseStream) {
         if (chunk && chunk.text) {
