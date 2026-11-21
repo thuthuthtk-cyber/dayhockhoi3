@@ -70,7 +70,7 @@ import { getStudentsFromLocalStorage, getClassStudentCount, generateDefaultClass
 import { auth, db } from '../../services/firebase';
 import { doc, onSnapshot, getDoc, setDoc, collection, getDocs, deleteDoc, runTransaction } from 'firebase/firestore';
 import { trackedSetDoc } from '../../services/firestoreWriteTracker';
-import { normalizeStudentCode, formatStandardStudentCode, normalizeStudentName } from '../../services/studentCode';
+import { normalizeStudentCode, formatStandardStudentCode } from '../../services/studentCode';
 import { checkQuestionCorrectLocal } from './StudentExamModule';
 import { useAcademicYear } from '../../contexts/AcademicYearContext';
 import { formatScore, formatTotalScore, roundTotalScore, isSubjectWithScore, getQualitativeLevel, getQualitativeLabel, getCurrentSubmissionTimestamp, formatSubmissionDateTime } from '../../utils/scoreUtils';
@@ -340,15 +340,8 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
       subsCollRef,
       (snap) => {
         const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        if (docs.length > 0) {
-          setLiveSubmissions(prev => {
-            const map = new Map<string, any>();
-            prev.forEach((s: any) => map.set(s.id || s.studentId || s.studentCode || s.maHs, s));
-            docs.forEach((s: any) => map.set(s.id || s.studentId || s.studentCode || s.maHs, s));
-            return Array.from(map.values());
-          });
-          setSubmissionSyncTick(t => t + 1);
-        }
+        setLiveSubmissions(docs);
+        setSubmissionSyncTick(t => t + 1);
       },
       (err) => {
         console.warn('Real-time subcollection submissions listener error:', err);
@@ -423,8 +416,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
                   const m = parsed.find((item: any) =>
                     item.assignment?.id === detailAssignment.id ||
                     item.id === detailAssignment.id ||
-                    item.assignmentId === detailAssignment.id ||
-                    (item.title && item.title === detailAssignment.title)
+                    item.assignmentId === detailAssignment.id
                   );
                   if (m) {
                     mergedSubsMap.set(String(st.code).toLowerCase(), {
@@ -500,6 +492,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
     window.addEventListener('eduplay_student_submissions_updated', handleSubmissionsUpdated);
     window.addEventListener('storage', handleSubmissionsUpdated);
     return () => {
+      window.removeEventListener('eduplay_student_submissions_updated', handleSubmissionsUpdated);
       window.removeEventListener('storage', handleSubmissionsUpdated);
     };
   }, []);
@@ -511,14 +504,58 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
         deleteTarget,
         detailAssignmentId: detailAssignment?.id
       });
+      setDeleteError('Thiếu thông tin bài tập hoặc học sinh cần xóa.');
       return;
     }
 
-    const targetCode = deleteTarget.code;
+    const targetCode = normalizeStudentCode(
+      deleteTarget.code ||
+      deleteTarget.rawSubmission?.studentCode ||
+      deleteTarget.rawSubmission?.maHs ||
+      deleteTarget.rawSubmission?.code ||
+      deleteTarget.rawSubmission?.studentId ||
+      ''
+    );
     const targetName = deleteTarget.name;
     const assignmentId = detailAssignment.id;
 
-    console.log(`[Delete Submission Start] Deleting assignment submission: StudentName="${targetName}", StudentCode="${targetCode}", AssignmentId="${assignmentId}"`);
+    if (!targetCode) {
+      setDeleteError('Không xác định được mã học sinh hợp lệ để xóa.');
+      return;
+    }
+
+    const extraCandidateIds = Array.from(
+      new Set(
+        [
+          deleteTarget.rawSubmission?.id,
+          deleteTarget.rawSubmission?.studentId,
+          deleteTarget.rawSubmission?.studentCode,
+          deleteTarget.rawSubmission?.maHs,
+          deleteTarget.rawSubmission?.code
+        ]
+          .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+      )
+    );
+    const extraCodeSet = new Set<string>([
+      targetCode,
+      ...extraCandidateIds.map((v) => normalizeStudentCode(v)).filter(Boolean)
+    ]);
+    const exactRawIdSet = new Set<string>(
+      extraCandidateIds.map((v) => v.trim().toLowerCase())
+    );
+
+    const isMatchedSubmission = (s: any): boolean => {
+      if (!s) return false;
+      const sRawId = String(s.id || '').trim().toLowerCase();
+      if (sRawId && exactRawIdSet.has(sRawId)) return true;
+      const candidates = [s.studentCode, s.code, s.maHs, s.studentId, s.userId];
+      return candidates.some((val) => {
+        if (!val || typeof val !== 'string') return false;
+        return extraCodeSet.has(normalizeStudentCode(val));
+      });
+    };
+
+    console.log(`[Delete Submission Start] Deleting assignment submission: StudentCode="${targetCode}", AssignmentId="${assignmentId}"`);
 
     setIsDeletingSubmission(true);
     setDeleteError(null);
@@ -527,50 +564,58 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
       const result = await resetOrDeleteStudentAssignmentSubmission({
         studentCode: targetCode,
         studentName: targetName,
-        studentId: targetCode,
-        assignmentId: assignmentId,
+        studentId: deleteTarget.rawSubmission?.studentId || targetCode,
+        assignmentId,
         originalAssignmentId: detailAssignment.originalAssignmentId,
-        targetClass: detailAssignment.targetClass
+        targetClass: detailAssignment.targetClass,
+        extraCandidateIds
       });
 
-      console.log(`[Delete Submission Success] Resetted/deleted submission for ${targetName} (${targetCode}):`, result);
+      console.log(`[Delete Submission Success] Resetted/deleted submission for ${targetCode}:`, result);
 
-      // 1. Immediately remove student's submission from liveSubmissions state
-      setLiveSubmissions(prev => prev.filter((s: any) => {
-        const code = normalizeStudentCode(s.studentCode || s.code || s.maHs || s.studentId || s.id || '');
-        return code !== normalizeStudentCode(targetCode);
-      }));
+      // 1. Xóa cache tracking (Memory & IndexedDB) trước khi cập nhật state
+      try {
+        clearMemoryTrackingData(assignmentId);
+        await clearIndexedDBTrackingData(assignmentId);
+        if (detailAssignment.originalAssignmentId) {
+          clearMemoryTrackingData(detailAssignment.originalAssignmentId);
+          await clearIndexedDBTrackingData(detailAssignment.originalAssignmentId);
+        }
+      } catch {}
 
-      // 2. Update detailAssignment.submissions locally so tracking list re-evaluates
-      setDetailAssignment(prev => {
-        if (!prev) return null;
-        const subs = Array.isArray(prev.submissions) ? prev.submissions : [];
-        const updatedSubs = subs.filter((s: any) => {
-          const code = normalizeStudentCode(s.studentCode || s.code || s.maHs || s.studentId || s.id || '');
-          return code !== normalizeStudentCode(targetCode);
-        });
-        return {
-          ...prev,
-          submissions: updatedSubs,
-          submittedCount: Math.max(0, updatedSubs.length),
-          completedCount: Math.max(0, updatedSubs.length)
-        };
-      });
+      // 2. Cập nhật ngay liveSubmissions và detailAssignment (KHÔNG gọi lại handleSyncSubmissions đóng trên detailAssignment cũ)
+      setLiveSubmissions((prev) => prev.filter((s: any) => !isMatchedSubmission(s)));
 
-      // 3. Force submissionSyncTick increment to trigger recalculation of trackingStudentsList
-      setSubmissionSyncTick(tick => tick + 1);
+      const currentSubs = Array.isArray(detailAssignment.submissions) ? detailAssignment.submissions : [];
+      const updatedSubs = currentSubs.filter((s: any) => !isMatchedSubmission(s));
+      const currentSubmittedIds = Array.isArray(detailAssignment.submittedIds) ? detailAssignment.submittedIds : [];
+      const updatedSubmittedIds = currentSubmittedIds.filter(
+        (idVal: any) => !extraCodeSet.has(normalizeStudentCode(String(idVal || '')))
+      );
 
-      // 4. Also call handleSyncSubmissions to ensure complete state sync
-      await handleSyncSubmissions(false);
+      const updatedAssignment: HomeworkAssignment = {
+        ...detailAssignment,
+        submissions: updatedSubs,
+        submittedIds: updatedSubmittedIds,
+        submittedCount: Math.max(0, updatedSubs.length),
+        completedCount: Math.max(0, updatedSubs.length)
+      };
 
-      // 5. Show Toast notification on UI
-      showToast(`Đã xóa kết quả bài làm của ${targetName}`);
+      setDetailAssignment(updatedAssignment);
+      onSaveAssignment(updatedAssignment);
 
-      // 6. Close the delete target modal
+      // 3. Kích hoạt tính lại bảng tracking ngay lập tức
+      setSubmissionSyncTick((tick) => tick + 1);
+
+      // 4. Đóng modal và hiển thị thông báo mượt mà
       setDeleteTarget(null);
+      setDeleteError(null);
+      showToast(`Đã xóa kết quả bài làm của học sinh ${targetName} (${targetCode})`);
     } catch (err: any) {
-      console.error(`[Delete Submission Error] Lỗi khi xóa kết quả bài làm của ${targetName} (${targetCode}):`, err);
-      setDeleteError(err?.message || 'Không thể xóa kết quả bài làm. Vui lòng kiểm tra lại kết nối mạng!');
+      console.error(`[Delete Submission Error] Lỗi khi xóa kết quả bài làm của ${targetCode}:`, err);
+      const errMsg = err?.message || 'Không thể xóa kết quả bài làm. Vui lòng kiểm tra lại kết nối mạng!';
+      setDeleteError(errMsg);
+      showToast(`⚠️ ${errMsg}`);
     } finally {
       setIsDeletingSubmission(false);
     }
@@ -666,6 +711,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
 
     const indexSubmission = (sub: any) => {
       if (!sub) return;
+      // Chỉ đối chiếu theo studentCode và các mã định danh kỹ thuật, TUYỆT ĐỐI KHÔNG đối chiếu theo tên học sinh
       const candidates = [
         sub.studentId,
         sub.maHs,
@@ -673,10 +719,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
         sub.code,
         sub.username,
         sub.userId,
-        sub.id,
-        sub.studentName,
-        sub.name,
-        sub.fullName
+        sub.id
       ];
 
       candidates.forEach(cand => {
@@ -684,7 +727,6 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
           const raw = cand.trim().toLowerCase();
           if (raw) {
             subMap.set(raw, sub);
-            // Normalized key (remove "st-", "hs-", "user-", accents/dashes/spaces)
             const clean = raw.replace(/^(st|hs|user|u)[\-_]?/i, '').replace(/[\s\-_]/g, '');
             if (clean) subMap.set(clean, sub);
 
@@ -704,13 +746,6 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
           }
         }
       });
-
-      const sName = sub.studentName || sub.name || sub.fullName;
-      if (sName && typeof sName === 'string') {
-        const normName = normalizeStudentName(sName);
-        if (normName) subMap.set(normName, sub);
-        subMap.set(sName.trim().toLowerCase(), sub);
-      }
     };
 
     // Index all existing submissions on detailAssignment and liveSubmissions
@@ -733,11 +768,10 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
             if (raw) {
               const parsed = JSON.parse(raw);
               if (Array.isArray(parsed)) {
-                const matched = parsed.find((item: any) => 
+                const matched = parsed.find((item: any) =>
                   item.assignment?.id === detailAssignment.id ||
                   item.id === detailAssignment.id ||
-                  item.assignmentId === detailAssignment.id ||
-                  (item.title && item.title === detailAssignment.title)
+                  item.assignmentId === detailAssignment.id
                 );
                 if (matched) {
                   const localSub = {
@@ -780,10 +814,7 @@ export const AssignmentModule: React.FC<AssignmentModuleProps> = ({
         st.username?.toLowerCase(),
         st.id?.replace(/^(st|hs|user|u)[\-_]?/i, '').replace(/[\s\-_]/g, ''),
         st.code?.toLowerCase().replace(/[\s\-_]/g, ''),
-        st.id?.toLowerCase().replace(/[\s\-_]/g, ''),
-        normalizeStudentName(st.fullName || st.name),
-        st.fullName?.trim().toLowerCase(),
-        st.name?.trim().toLowerCase(),
+        st.id?.toLowerCase().replace(/[\s\-_]/g, '')
       ].filter(Boolean) as string[];
 
       let submission: any = null;

@@ -1,4 +1,15 @@
-import { doc, setDoc, getDocFromServer, getDoc } from 'firebase/firestore';
+import {
+  doc,
+  setDoc,
+  getDocFromServer,
+  getDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  updateDoc,
+  writeBatch
+} from 'firebase/firestore';
 import { db } from './firebase';
 import { normalizeStudentCode } from './studentCode';
 import { sanitizeForFirestore, withFirestoreTimeout } from '../utils/firestoreSanitizer';
@@ -274,6 +285,206 @@ export const studentResultService = {
       console.error('Lỗi khi lưu bài tập vào Firestore:', error);
       throw error;
     }
+  },
+
+  /**
+   * Xóa toàn bộ kết quả bài tập / đề kiểm tra của học sinh trong `student_results`
+   * Chỉ đối chiếu theo `studentCode` đã chuẩn hóa (không phụ thuộc tên học sinh).
+   */
+  async deleteStudentTargetResult(
+    rawStudentCode: string,
+    targetIds: string | string[]
+  ): Promise<{ deletedCount: number }> {
+    const studentCode = normalizeStudentCode(rawStudentCode);
+    if (!studentCode) throw new Error('Mã học sinh không hợp lệ');
+
+    const rawList = Array.isArray(targetIds) ? targetIds : [targetIds];
+    const cleanTargetIds = Array.from(
+      new Set(rawList.map((t) => String(t || '').trim()).filter(Boolean))
+    );
+    if (cleanTargetIds.length === 0) {
+      return { deletedCount: 0 };
+    }
+    const targetLowerSet = new Set(cleanTargetIds.map((t) => t.toLowerCase()));
+
+    let deletedCount = 0;
+
+    try {
+      const candidateSrDocIds = new Set<string>([
+        studentCode,
+        studentCode.toLowerCase(),
+      ]);
+
+      // 1. Truy vấn trực tiếp `student_results` theo `studentCode` (hỗ trợ cả bản ghi hoa/thường)
+      const srRef = collection(db, STUDENT_RESULTS_COLLECTION);
+      const codeQueries = [
+        query(srRef, where('studentCode', '==', studentCode)),
+        query(srRef, where('studentCode', '==', studentCode.toLowerCase())),
+      ];
+      for (const q of codeQueries) {
+        try {
+          const snap = await withFirestoreTimeout(getDocs(q), 8000, 'deleteStudentTargetResult.codeQuery');
+          snap.forEach((d) => candidateSrDocIds.add(d.id));
+        } catch (qErr) {
+          console.warn('Lỗi truy vấn student_results theo studentCode:', qErr);
+        }
+      }
+
+      // 2. Truy vấn trực tiếp `student_results` theo `targetId` / `assignmentId` / `examId`
+      const refsToDelete = new Map<string, ReturnType<typeof doc>>();
+      for (const tid of cleanTargetIds) {
+        const directTargetQueries = [
+          query(srRef, where('targetId', '==', tid)),
+          query(srRef, where('assignmentId', '==', tid)),
+          query(srRef, where('examId', '==', tid)),
+        ];
+        for (const tq of directTargetQueries) {
+          try {
+            const snap = await withFirestoreTimeout(getDocs(tq), 8000, 'deleteStudentTargetResult.targetQuery');
+            snap.forEach((d) => {
+              const data = d.data() || {};
+              const docCode = normalizeStudentCode(
+                data.studentCode || data.code || data.maHs || data.studentId || ''
+              );
+              const docIdNorm = normalizeStudentCode(d.id);
+              const matchesStudent =
+                docCode === studentCode ||
+                docIdNorm === studentCode ||
+                docIdNorm.startsWith(`${studentCode}_`) ||
+                docIdNorm.startsWith(`${studentCode}-`) ||
+                docIdNorm.endsWith(`_${studentCode}`) ||
+                docIdNorm.endsWith(`-${studentCode}`);
+
+              if (!matchesStudent) return;
+
+              // Nếu là hồ sơ tổng hợp của học sinh (có nhiều mục khác), đưa vào danh sách cập nhật map;
+              // nếu là bản ghi kết quả đơn lẻ gắn trực tiếp targetId, đưa vào batch delete.
+              const isAggregateProfile =
+                docIdNorm === studentCode &&
+                (typeof data.assignments === 'object' ||
+                  typeof data.exams === 'object' ||
+                  typeof data.lessons === 'object' ||
+                  typeof data.games === 'object');
+
+              if (isAggregateProfile) {
+                candidateSrDocIds.add(d.id);
+              } else {
+                refsToDelete.set(d.ref.path, d.ref);
+              }
+            });
+          } catch (tqErr) {
+            console.warn(`Lỗi truy vấn student_results theo target ${tid}:`, tqErr);
+          }
+        }
+      }
+
+      // 3. Làm sạch map `assignments` / `exams` và subcollections `assignments` / `exams` của từng `student_results/{srDocId}`
+      for (const srDocId of candidateSrDocIds) {
+        const srDocRef = doc(db, STUDENT_RESULTS_COLLECTION, srDocId);
+        try {
+          const srSnap = await withFirestoreTimeout(getDoc(srDocRef), 8000, 'deleteStudentTargetResult.getProfile');
+          if (srSnap.exists()) {
+            const data = srSnap.data() || {};
+            const docCode = normalizeStudentCode(data.studentCode || srSnap.id || '');
+            if (docCode === studentCode || normalizeStudentCode(srSnap.id) === studentCode) {
+              const updatePayload: Record<string, any> = {};
+              let modified = false;
+
+              if (data.assignments && typeof data.assignments === 'object') {
+                const nextAssignments = { ...data.assignments };
+                for (const [k, v] of Object.entries<any>(nextAssignments)) {
+                  const keyLower = k.trim().toLowerCase();
+                  const valTid = String(v?.assignmentId || v?.targetId || v?.id || '').trim().toLowerCase();
+                  if (targetLowerSet.has(keyLower) || (valTid && targetLowerSet.has(valTid))) {
+                    delete nextAssignments[k];
+                    modified = true;
+                    deletedCount++;
+                  }
+                }
+                if (modified) {
+                  updatePayload.assignments = nextAssignments;
+                }
+              }
+
+              if (data.exams && typeof data.exams === 'object') {
+                const nextExams = { ...data.exams };
+                let examModified = false;
+                for (const [k, v] of Object.entries<any>(nextExams)) {
+                  const keyLower = k.trim().toLowerCase();
+                  const valTid = String(v?.examId || v?.targetId || v?.assignmentId || v?.id || '').trim().toLowerCase();
+                  if (targetLowerSet.has(keyLower) || (valTid && targetLowerSet.has(valTid))) {
+                    delete nextExams[k];
+                    examModified = true;
+                    deletedCount++;
+                  }
+                }
+                if (examModified) {
+                  updatePayload.exams = nextExams;
+                  modified = true;
+                }
+              }
+
+              if (modified) {
+                updatePayload.updatedAt = new Date().toISOString();
+                await withFirestoreTimeout(updateDoc(srDocRef, updatePayload), 8000, 'deleteStudentTargetResult.updateProfile');
+              }
+            }
+          }
+        } catch (profileErr) {
+          console.warn(`Lỗi cập nhật hồ sơ student_results/${srDocId}:`, profileErr);
+        }
+
+        // Quét & xóa trong 2 subcollection `assignments` và `exams`
+        for (const subName of ['assignments', 'exams'] as const) {
+          const subColRef = collection(db, STUDENT_RESULTS_COLLECTION, srDocId, subName);
+          try {
+            const subSnap = await withFirestoreTimeout(getDocs(subColRef), 8000, `deleteStudentTargetResult.sub.${subName}`);
+            subSnap.forEach((docSnap) => {
+              const sData = docSnap.data() || {};
+              const idLower = docSnap.id.trim().toLowerCase();
+              const fieldIds = [sData.assignmentId, sData.examId, sData.targetId, sData.id]
+                .filter(Boolean)
+                .map((x) => String(x).trim().toLowerCase());
+              if (targetLowerSet.has(idLower) || fieldIds.some((fid) => targetLowerSet.has(fid))) {
+                refsToDelete.set(docSnap.ref.path, docSnap.ref);
+              }
+            });
+          } catch (subErr) {
+            console.warn(`Lỗi đọc subcollection student_results/${srDocId}/${subName}:`, subErr);
+          }
+
+          // Truy vấn trực tiếp bằng where('assignmentId' / 'targetId') phòng trường hợp cần index/direct match
+          for (const tid of cleanTargetIds) {
+            for (const field of ['targetId', 'assignmentId', 'examId'] as const) {
+              try {
+                const qSub = query(subColRef, where(field, '==', tid));
+                const qSnap = await withFirestoreTimeout(getDocs(qSub), 8000, `deleteStudentTargetResult.qSub.${field}`);
+                qSnap.forEach((docSnap) => {
+                  refsToDelete.set(docSnap.ref.path, docSnap.ref);
+                });
+              } catch {}
+            }
+          }
+        }
+      }
+
+      // 4. Thực thi xóa hàng loạt bằng writeBatch
+      const allRefs = Array.from(refsToDelete.values());
+      const CHUNK_SIZE = 450;
+      for (let i = 0; i < allRefs.length; i += CHUNK_SIZE) {
+        const chunk = allRefs.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((r) => batch.delete(r));
+        await withFirestoreTimeout(batch.commit(), 10000, 'deleteStudentTargetResult.batchCommit');
+        deletedCount += chunk.length;
+      }
+
+      return { deletedCount };
+    } catch (error) {
+      console.error('Lỗi khi xóa kết quả học sinh trên student_results:', error);
+      throw error;
+    }
   }
 };
+
 
